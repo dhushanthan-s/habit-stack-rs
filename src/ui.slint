@@ -1,0 +1,239 @@
+import { VerticalBox, HorizontalBox, ScrollView, Button, LineEdit } from "std-widgets.slint";
+
+export struct GraphDay {
+    date: string,
+    status: string,
+    intensity: float,
+    has_note: bool,
+}
+
+export struct GraphWeek {
+    start_label: string,
+    days: [GraphDay],
+}
+
+export struct HabitChip {
+    id: string,
+    name: string,
+    color: string,
+    selected: bool,
+}
+
+export component AppWindow inherits Window {
+    width: 360px;
+    height: 640px;
+    background: #0b0c10;
+
+    in property <[GraphWeek]> graph_weeks;
+    in property <[HabitChip]> habits;
+    in-out property <string> new_habit_name;
+
+    callback day_tapped(date: string);
+    callback habit_selected(id: string);
+    callback toggle_today(id: string);
+    callback add_habit_requested(name: string);
+
+    VerticalBox {
+        padding: 16px;
+        spacing: 16px;
+
+        // Top bar
+        HorizontalBox {
+            spacing: 8px;
+            Text {
+                text: "Habit Stack";
+                font-size: 22px;
+                color: #f5f5f7;
+                font-weight: 600;
+            }
+            Rectangle { // flexible spacer
+                min-width: 1px;
+                height: 1px;
+            }
+            Text {
+                text: "Today";
+                font-size: 14px;
+                color: #8a8b93;
+            }
+        }
+
+        // Habit selector row
+        ScrollView {
+            height: 40px;
+
+            HorizontalBox {
+                spacing: 8px;
+
+                for habit in root.habits : Rectangle {
+                    border-radius: 999px;
+                    background: habit.selected ? #2dd4bf : #11121a;
+                    height: 32px;
+
+                    HorizontalBox {
+                        padding: 8px;
+                        Text {
+                            text: habit.name;
+                            color: habit.selected ? #020617 : #e5e7eb;
+                            font-size: 13px;
+                        }
+                    }
+
+                    TouchArea {
+                        clicked => {
+                            root.habit_selected(habit.id);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Graph area
+        Rectangle {
+            background: #11121a;
+            border-radius: 12px;
+            height: 260px;
+
+            ScrollView {
+                padding: 12px;
+
+                HorizontalBox {
+                    spacing: 4px;
+
+                    for week[idx] in root.graph_weeks : Rectangle {
+                        background: #11121a;
+
+                        VerticalBox {
+                            spacing: 4px;
+
+                            for day in week.days : Rectangle {
+                                width: 16px;
+                                height: 16px;
+                                border-radius: 4px;
+                                background: Theme.day_color(day.status);
+
+                                touch := TouchArea {
+                                    clicked => {
+                                        root.day_tapped(day.date);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Today list – all habits as checklist
+        VerticalBox {
+            spacing: 8px;
+
+            Text {
+                text: "Today";
+                font-size: 16px;
+                color: #f5f5f7;
+            }
+
+            ScrollView {
+                Rectangle {
+                    height: 1px; // ensure ScrollView has content root
+                }
+
+                VerticalBox {
+                    spacing: 6px;
+
+                    for habit in root.habits : Rectangle {
+                        border-radius: 10px;
+                        background: #11121a;
+                        height: 56px;
+
+                        HorizontalBox {
+                            padding: 12px;
+                            spacing: 12px;
+
+                            Rectangle {
+                                width: 22px;
+                                height: 22px;
+                                border-radius: 6px;
+                                border-width: 2px;
+                                border-color: #64748b;
+                            }
+
+                            VerticalBox {
+                                spacing: 2px;
+                                Text {
+                                    text: habit.name;
+                                    font-size: 14px;
+                                    color: #f5f5f7;
+                                }
+                                Text {
+                                    text: "Tap to toggle today";
+                                    font-size: 11px;
+                                    color: #6e6f78;
+                                }
+                            }
+                        }
+
+                        TouchArea {
+                            clicked => {
+                                root.toggle_today(habit.id);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Add habit inline control
+            HorizontalBox {
+                spacing: 8px;
+
+                LineEdit {
+                    placeholder-text: "Add habit";
+                    text <=> root.new_habit_name;
+                    font-size: 13px;
+                }
+
+                Button {
+                    text: "+";
+                    width: 40px;
+                    clicked => {
+                        if root.new_habit_name != "" {
+                            root.add_habit_requested(root.new_habit_name);
+                            root.new_habit_name = "";
+                        }
+                    }
+                }
+            }
+        }
+
+        // Bottom bar (static for now, ready for future screens)
+        HorizontalBox {
+            spacing: 16px;
+            padding-top: 8px;
+
+            Button {
+                text: "Today";
+            }
+            Button {
+                text: "Graph";
+            }
+            Button {
+                text: "Habits";
+            }
+        }
+    }
+}
+
+export global Theme {
+    pure public function day_color(status: string) -> color {
+        if status == "done" {
+            return #2dd4bf;
+        } else if status == "skipped" {
+            return #4b5563;
+        } else if status == "missed" {
+            return #ef4444;
+        } else {
+            return #0f172a;
+        }
+    }
+}
+
