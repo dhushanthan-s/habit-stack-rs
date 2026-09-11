@@ -7,6 +7,8 @@ import { GraphWeek, GraphDay } from "types.slint";
 export component ContributionGraph inherits Rectangle {
     in property <[GraphWeek]> weeks;
     in property <color> tint;
+    /// Seven gutter captions, supplied by Rust so week-start stays one setting.
+    in property <[string]> weekday_labels;
 
     property <int> week_count: max(root.weeks.length, 1);
     property <length> gap: 3px;
@@ -40,7 +42,7 @@ export component ContributionGraph inherits Rectangle {
     }
 
     // Weekday gutter, labelled on alternating rows only.
-    for label[di] in [ "Mon", "", "Wed", "", "Fri", "", "" ] : Text {
+    for label[di] in root.weekday_labels : Text {
         x: 0;
         y: root.month_row + di * (root.cell + root.gap);
         width: root.label_col - 5px;

@@ -2,50 +2,10 @@ import { ScrollView } from "std-widgets.slint";
 import { Theme } from "ui/theme.slint";
 import { GraphDay, GraphWeek, HabitGraph, HabitItem, HabitStats } from "ui/types.slint";
 import { TabBar } from "ui/components.slint";
-import { TodayPage, GraphPage, HabitsPage } from "ui/pages.slint";
+import { TodayPage, GraphPage, HabitsPage, SettingsPage } from "ui/pages.slint";
 
 // Re-exported so slint-build generates the matching Rust types.
 export { GraphDay, GraphWeek, HabitGraph, HabitItem, HabitStats, Theme }
-
-// Sun in light mode (a ring), crescent moon in dark (a disc with a bite).
-component ThemeToggle inherits Rectangle {
-    callback clicked();
-
-    width: 38px;
-    height: 38px;
-    border-radius: Theme.r_md;
-    background: touch.pressed ? Theme.surface_alt : transparent;
-    animate background {
-        duration: Theme.quick;
-        easing: ease-out;
-    }
-
-    Rectangle {
-        width: 17px;
-        height: 17px;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        border-radius: self.width / 2;
-        background: Theme.dark ? Theme.text_muted : transparent;
-        border-width: Theme.dark ? 0px : 2px;
-        border-color: Theme.text_muted;
-
-        if Theme.dark : Rectangle {
-            width: 14px;
-            height: 14px;
-            x: 6px;
-            y: -4px;
-            border-radius: self.width / 2;
-            background: Theme.bg;
-        }
-    }
-
-    touch := TouchArea {
-        clicked => {
-            root.clicked();
-        }
-    }
-}
 
 export component AppWindow inherits Window {
     title: "Habit Stack";
@@ -62,6 +22,14 @@ export component AppWindow inherits Window {
     in property <[color]> palette;
     in property <color> accent;
     in property <string> today_label;
+    in property <[string]> weekday_labels;
+    in property <[string]> day_labels;
+    in property <int> due_count;
+    in property <string> due_label;
+    in property <int> theme_mode;
+    in property <int> accent_index;
+    in property <int> graph_weeks;
+    in property <bool> week_start_sunday;
 
     in-out property <string> new_habit_name;
     in-out property <int> new_color_index;
@@ -71,7 +39,13 @@ export component AppWindow inherits Window {
     callback add_habit_requested(name: string, color_index: int);
     callback set_habit_color(id: string, color_index: int);
     callback archive_habit(id: string);
-    callback theme_changed(dark: bool);
+    callback reminder_toggled(id: string, on: bool);
+    callback reminder_shift(id: string, hours: int, minutes: int);
+    callback reminder_day_toggled(id: string, day: int);
+    callback theme_mode_picked(index: int);
+    callback accent_picked(index: int);
+    callback graph_weeks_picked(weeks: int);
+    callback week_start_picked(sunday: bool);
 
     VerticalLayout {
         // ------------------------------------------------------------ header
@@ -82,26 +56,12 @@ export component AppWindow inherits Window {
             padding-bottom: Theme.sp_4;
             spacing: 2px;
 
-            HorizontalLayout {
-                alignment: space-between;
-
-                VerticalLayout {
-                    alignment: center;
-                    Text {
-                        text: "Habit Stack";
-                        font-size: Theme.fs_title;
-                        font-weight: 700;
-                        letter-spacing: -0.2px;
-                        color: Theme.text;
-                    }
-                }
-
-                ThemeToggle {
-                    clicked => {
-                        Theme.dark = !Theme.dark;
-                        root.theme_changed(Theme.dark);
-                    }
-                }
+            Text {
+                text: "Habit Stack";
+                font-size: Theme.fs_title;
+                font-weight: 700;
+                letter-spacing: -0.2px;
+                color: Theme.text;
             }
 
             Text {
@@ -127,11 +87,15 @@ export component AppWindow inherits Window {
                     totals: root.totals;
                     accent: root.accent;
                     summary_label: root.summary_label;
+                    weekday_labels: root.weekday_labels;
                 }
 
                 if root.active_tab == 1 : TodayPage {
                     habits: root.habits;
                     palette: root.palette;
+                    accent: root.accent;
+                    due_count: root.due_count;
+                    due_label: root.due_label;
                     new_habit_name <=> root.new_habit_name;
                     new_color_index <=> root.new_color_index;
                     toggle(id) => {
@@ -145,11 +109,42 @@ export component AppWindow inherits Window {
                 if root.active_tab == 2 : HabitsPage {
                     habits: root.habits;
                     palette: root.palette;
+                    day_labels: root.day_labels;
                     recolor(id, index) => {
                         root.set_habit_color(id, index);
                     }
                     archive(id) => {
                         root.archive_habit(id);
+                    }
+                    reminder_toggled(id, on) => {
+                        root.reminder_toggled(id, on);
+                    }
+                    reminder_shift(id, hours, minutes) => {
+                        root.reminder_shift(id, hours, minutes);
+                    }
+                    reminder_day_toggled(id, day) => {
+                        root.reminder_day_toggled(id, day);
+                    }
+                }
+
+                if root.active_tab == 3 : SettingsPage {
+                    palette: root.palette;
+                    accent: root.accent;
+                    theme_mode: root.theme_mode;
+                    accent_index: root.accent_index;
+                    graph_weeks: root.graph_weeks;
+                    week_start_sunday: root.week_start_sunday;
+                    theme_mode_picked(index) => {
+                        root.theme_mode_picked(index);
+                    }
+                    accent_picked(index) => {
+                        root.accent_picked(index);
+                    }
+                    graph_weeks_picked(weeks) => {
+                        root.graph_weeks_picked(weeks);
+                    }
+                    week_start_picked(sunday) => {
+                        root.week_start_picked(sunday);
                     }
                 }
             }
@@ -159,6 +154,7 @@ export component AppWindow inherits Window {
         TabBar {
             tint: root.accent;
             current <=> root.active_tab;
+            badge: root.due_count;
         }
     }
 }

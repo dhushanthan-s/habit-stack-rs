@@ -1,11 +1,20 @@
 pub mod model;
+pub mod reminders;
 pub mod storage;
 pub mod view_model;
 
-use crate::view_model::{habit_color, AppState, HABIT_PALETTE};
-use slint::{Color, ModelRc, VecModel};
+use crate::view_model::{habit_color, AppState, ThemeMode, WeekStart, HABIT_PALETTE};
+use chrono::Local;
+use slint::{Color, ModelRc, Timer, TimerMode, VecModel};
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::Duration;
+
+/// How often the reminder tick runs. Deliberately short: Slint timers run on a
+/// monotonic clock that pauses while the machine sleeps, so one long timer to
+/// "08:00" would drift by the sleep duration. A frequent tick comparing local
+/// wall-clock time is immune to that, and to App Nap throttling.
+const TICK: Duration = Duration::from_secs(30);
 
 slint::include_modules!();
 
@@ -84,17 +93,32 @@ fn push_state(app: &AppWindow, state: &AppState) {
         .iter()
         .map(|h| {
             let streak = state.current_streak(view_model::Scope::Habit(h.id));
+            let reminder = state.reminder_for(h.id);
             HabitItem {
                 id: h.id.to_string().into(),
                 name: h.name.clone().into(),
                 color: color_of(habit_color(h)),
                 done_today: state.done_today(h.id),
-                streak_label: if streak > 0 {
-                    format!("{} streak", plural(streak, "day")).into()
-                } else {
-                    "No streak yet".into()
+                streak_label: {
+                    let streak_text = if streak > 0 {
+                        format!("{} streak", plural(streak, "day"))
+                    } else {
+                        "No streak yet".to_string()
+                    };
+                    match reminder.filter(|r| r.enabled) {
+                        Some(r) => format!("{} · {}", r.label(), streak_text).into(),
+                        None => streak_text.into(),
+                    }
                 },
                 created_label: format!("Since {}", h.created_at.format("%-d %b %Y")).into(),
+                due: state.due.iter().any(|d| d.habit_id == h.id),
+                reminder_on: reminder.map(|r| r.enabled).unwrap_or(false),
+                reminder_label: reminder.map(|r| r.label()).unwrap_or_default().into(),
+                reminder_days: ModelRc::from(Rc::new(VecModel::from(
+                    (0..7)
+                        .map(|d| reminder.map(|r| r.days & (1 << d) != 0).unwrap_or(false))
+                        .collect::<Vec<bool>>(),
+                ))),
             }
         })
         .collect();
@@ -124,6 +148,31 @@ fn push_state(app: &AppWindow, state: &AppState) {
 
     app.set_accent(color_of(state.accent()));
     app.set_today_label(state.today.format("%A, %-d %B").to_string().into());
+
+    // Reminder surfacing.
+    app.set_due_count(state.due.len() as i32);
+    app.set_due_label(match state.due.len() {
+        0 => String::new(),
+        1 => format!("{} is due now", state.due[0].habit_name),
+        n => format!("{} due now", plural(n as u32, "habit")),
+    }
+    .into());
+
+    // Settings.
+    app.set_theme_mode(state.theme_mode.as_index());
+    app.set_accent_index(state.accent_index.map_or(-1, |i| i as i32));
+    app.set_graph_weeks(state.graph_weeks as i32);
+    app.set_week_start_sunday(state.week_start == WeekStart::Sunday);
+    app.global::<Theme>().set_mode(state.theme_mode.as_index());
+
+    app.set_weekday_labels(ModelRc::from(Rc::new(VecModel::from(
+        state
+            .week_start
+            .labels()
+            .iter()
+            .map(|l| (*l).into())
+            .collect::<Vec<slint::SharedString>>(),
+    ))));
 }
 
 fn main() {
@@ -135,7 +184,14 @@ fn main() {
     app.set_palette(ModelRc::from(Rc::new(VecModel::from(
         HABIT_PALETTE.iter().copied().map(color_of).collect::<Vec<_>>(),
     ))));
-    app.global::<Theme>().set_dark(state.dark_theme);
+    // Reminder day labels are always Monday-indexed, matching the stored
+    // bitmask, regardless of which day the graph starts its weeks on.
+    app.set_day_labels(ModelRc::from(Rc::new(VecModel::from(
+        ["M", "T", "W", "T", "F", "S", "S"]
+            .iter()
+            .map(|l| (*l).into())
+            .collect::<Vec<slint::SharedString>>(),
+    ))));
 
     push_state(&app, &state);
 
@@ -176,8 +232,42 @@ fn main() {
         }
     });
 
-    on!(on_theme_changed, |state, dark| {
-        let _ = state.set_dark_theme(dark);
+    on!(on_reminder_toggled, |state, id, on| {
+        if let Ok(id) = uuid::Uuid::parse_str(&id) {
+            let _ = state.set_reminder_enabled(id, on);
+        }
+    });
+
+    on!(on_reminder_shift, |state, id, hours, minutes| {
+        if let Ok(id) = uuid::Uuid::parse_str(&id) {
+            let _ = state.shift_reminder_time(id, hours, minutes);
+        }
+    });
+
+    on!(on_reminder_day_toggled, |state, id, day| {
+        if let (Ok(id), true) = (uuid::Uuid::parse_str(&id), day >= 0) {
+            let _ = state.toggle_reminder_day(id, day as u32);
+        }
+    });
+
+    on!(on_theme_mode_picked, |state, index| {
+        let _ = state.set_theme_mode(ThemeMode::from_index(index));
+    });
+
+    on!(on_accent_picked, |state, index| {
+        let _ = state.set_accent_index(if index < 0 { None } else { Some(index as usize) });
+    });
+
+    on!(on_graph_weeks_picked, |state, weeks| {
+        let _ = state.set_graph_weeks(weeks as i64);
+    });
+
+    on!(on_week_start_picked, |state, sunday| {
+        let _ = state.set_week_start(if sunday {
+            WeekStart::Sunday
+        } else {
+            WeekStart::Monday
+        });
     });
 
     // Clearing the field is a UI concern, so it sits outside the macro.
@@ -193,6 +283,25 @@ fn main() {
                 push_state(&app, &state);
             }
             app.set_new_habit_name("".into());
+        }
+    });
+
+    // Bound to a local so it outlives `run()`: a dropped Timer silently stops.
+    let tick = Timer::default();
+    tick.start(TimerMode::Repeated, TICK, {
+        let weak = weak.clone();
+        let shared = shared.clone();
+        move || {
+            let Some(app) = weak.upgrade() else { return };
+            // A UI callback may hold the borrow; skip rather than panic.
+            let Ok(mut state) = shared.try_borrow_mut() else {
+                return;
+            };
+            let rolled = state.sync_today().unwrap_or(false);
+            let changed = state.recompute_due(Local::now().naive_local());
+            if rolled || changed {
+                push_state(&app, &state);
+            }
         }
     });
 

@@ -261,6 +261,7 @@ export component HabitRow inherits Rectangle {
     in property <string> subtitle: root.item.streak_label;
     /// When false the row body is inert and only the checkbox reacts.
     in property <bool> selectable: true;
+    in property <bool> show_due: true;
     callback toggled();
     callback picked();
 
@@ -308,6 +309,30 @@ export component HabitRow inherits Rectangle {
             }
         }
 
+        if root.show_due && root.item.due : VerticalLayout {
+            alignment: center;
+            Rectangle {
+                height: 20px;
+                border-radius: 10px;
+                background: root.item.color.with_alpha(0.18);
+
+                HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text: "DUE";
+                            font-size: 9px;
+                            font-weight: 700;
+                            letter-spacing: 0.6px;
+                            color: root.item.color;
+                        }
+                    }
+                }
+            }
+        }
+
         if root.show_check : CheckButton {
             checked: root.item.done_today;
             tint: root.item.color;
@@ -316,6 +341,215 @@ export component HabitRow inherits Rectangle {
             }
         }
     }
+}
+
+export component Toggle inherits Rectangle {
+    in property <bool> on;
+    in property <color> tint;
+    callback toggled(on: bool);
+
+    width: 46px;
+    height: 28px;
+    border-radius: 14px;
+    background: root.on ? root.tint : Theme.surface_alt;
+    border-width: 1px;
+    border-color: root.on ? root.tint : Theme.border;
+    animate background, border-color {
+        duration: Theme.quick;
+        easing: ease-out;
+    }
+
+    Rectangle {
+        width: 22px;
+        height: 22px;
+        y: 2px;
+        x: root.on ? parent.width - self.width - 3px : 3px;
+        border-radius: 11px;
+        background: root.on ? #09090B : Theme.text_faint;
+        animate x, background {
+            duration: Theme.quick;
+            easing: ease-out;
+        }
+    }
+
+    TouchArea {
+        clicked => {
+            root.toggled(!root.on);
+        }
+    }
+}
+
+component StepArrow inherits Rectangle {
+    in property <string> glyph;
+    callback clicked();
+
+    width: 34px;
+    border-radius: Theme.r_sm;
+    background: touch.pressed ? Theme.surface : transparent;
+    animate background {
+        duration: Theme.quick;
+        easing: ease-out;
+    }
+
+    VerticalLayout {
+        alignment: center;
+        Text {
+            text: root.glyph;
+            font-size: Theme.fs_title;
+            font-weight: 500;
+            color: Theme.text_muted;
+            horizontal-alignment: center;
+        }
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+export component Stepper inherits Rectangle {
+    in property <string> value;
+    callback step(delta: int);
+
+    height: 38px;
+    border-radius: Theme.r_md;
+    background: Theme.surface_alt;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    HorizontalLayout {
+        padding: 2px;
+
+        StepArrow {
+            glyph: "-";
+            clicked => {
+                root.step(-1);
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: root.value;
+                font-size: Theme.fs_body;
+                font-weight: 600;
+                color: Theme.text;
+                horizontal-alignment: center;
+                min-width: 30px;
+            }
+        }
+
+        StepArrow {
+            glyph: "+";
+            clicked => {
+                root.step(1);
+            }
+        }
+    }
+}
+
+export component DayToggle inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+    in property <color> tint;
+    callback clicked();
+
+    width: 32px;
+    height: 32px;
+    border-radius: 16px;
+    background: root.on ? root.tint.with_alpha(0.18) : Theme.surface_alt;
+    border-width: 1px;
+    border-color: root.on ? root.tint.with_alpha(0.6) : Theme.border;
+    animate background, border-color {
+        duration: Theme.quick;
+        easing: ease-out;
+    }
+
+    VerticalLayout {
+        alignment: center;
+        Text {
+            text: root.label;
+            font-size: Theme.fs_caption;
+            font-weight: root.on ? 700 : 500;
+            color: root.on ? Theme.text : Theme.text_faint;
+            horizontal-alignment: center;
+        }
+    }
+
+    TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+export component Segmented inherits Rectangle {
+    in property <[string]> options;
+    in property <int> selected;
+    callback picked(index: int);
+
+    height: 38px;
+    border-radius: Theme.r_md;
+    background: Theme.surface_alt;
+
+    HorizontalLayout {
+        padding: 3px;
+        spacing: 3px;
+
+        for label[i] in root.options : Rectangle {
+            border-radius: Theme.r_md - 3px;
+            background: i == root.selected ? Theme.surface : transparent;
+            border-width: i == root.selected ? 1px : 0px;
+            border-color: Theme.border;
+            animate background {
+                duration: Theme.quick;
+                easing: ease-out;
+            }
+
+            VerticalLayout {
+                alignment: center;
+                Text {
+                    text: label;
+                    font-size: Theme.fs_label;
+                    font-weight: i == root.selected ? 600 : 500;
+                    color: i == root.selected ? Theme.text : Theme.text_muted;
+                    horizontal-alignment: center;
+                }
+            }
+
+            TouchArea {
+                clicked => {
+                    root.picked(i);
+                }
+            }
+        }
+    }
+}
+
+export component SettingRow inherits VerticalLayout {
+    in property <string> label;
+    in property <string> hint;
+    spacing: Theme.sp_2;
+
+    VerticalLayout {
+        spacing: 2px;
+        Text {
+            text: root.label;
+            font-size: Theme.fs_body;
+            font-weight: 500;
+            color: Theme.text;
+        }
+        if root.hint != "" : Text {
+            text: root.hint;
+            font-size: Theme.fs_caption;
+            color: Theme.text_faint;
+            wrap: word-wrap;
+        }
+    }
+
+    @children
 }
 
 // ------------------------------------------------------------------ tab icons
@@ -382,9 +616,56 @@ component IconHabits inherits Rectangle {
     }
 }
 
+component IconSettings inherits Rectangle {
+    in property <color> tint;
+    width: 18px;
+    height: 18px;
+
+    // Two slider tracks, knob sitting on the line - distinct from the habits
+    // icon, whose dots lead each row.
+    Rectangle {
+        x: 1px;
+        y: 5px;
+        width: 16px;
+        height: 2px;
+        border-radius: 1px;
+        background: root.tint;
+        opacity: 0.55;
+    }
+    Rectangle {
+        x: 4px;
+        y: 3px;
+        width: 6px;
+        height: 6px;
+        border-radius: 3px;
+        background: root.tint;
+    }
+    Rectangle {
+        x: 1px;
+        y: 11px;
+        width: 16px;
+        height: 2px;
+        border-radius: 1px;
+        background: root.tint;
+        opacity: 0.55;
+    }
+    Rectangle {
+        x: 9px;
+        y: 9px;
+        width: 6px;
+        height: 6px;
+        border-radius: 3px;
+        background: root.tint;
+    }
+}
+
 export component TabBar inherits Rectangle {
     in property <color> tint;
     in-out property <int> current;
+    /// Count shown on the Today tab; hidden when zero.
+    in property <int> badge;
+
+    property <[string]> labels: [ "Graph", "Today", "Habits", "Settings" ];
 
     height: 62px;
     background: Theme.bg;
@@ -402,7 +683,8 @@ export component TabBar inherits Rectangle {
         width: 26px;
         border-radius: 1px;
         background: root.tint;
-        x: (root.width / 3) * root.current + (root.width / 3 - self.width) / 2;
+        x: (root.width / root.labels.length) * root.current
+            + (root.width / root.labels.length - self.width) / 2;
         animate x {
             duration: Theme.quick;
             easing: ease-out;
@@ -412,7 +694,7 @@ export component TabBar inherits Rectangle {
     HorizontalLayout {
         padding-top: Theme.sp_2;
 
-        for tab[i] in [ "Graph", "Today", "Habits" ] : Rectangle {
+        for tab[i] in root.labels : Rectangle {
             VerticalLayout {
                 alignment: center;
                 spacing: 5px;
@@ -427,6 +709,26 @@ export component TabBar inherits Rectangle {
                     }
                     if i == 2 : IconHabits {
                         tint: i == root.current ? root.tint : Theme.text_faint;
+                    }
+                    if i == 3 : IconSettings {
+                        tint: i == root.current ? root.tint : Theme.text_faint;
+                    }
+
+                    if i == 1 && root.badge > 0 : Rectangle {
+                        width: 16px;
+                        height: 16px;
+                        border-radius: 8px;
+                        background: root.tint;
+                        VerticalLayout {
+                            alignment: center;
+                            Text {
+                                text: root.badge;
+                                font-size: 9px;
+                                font-weight: 700;
+                                color: #09090B;
+                                horizontal-alignment: center;
+                            }
+                        }
                     }
                 }
 

@@ -24,10 +24,10 @@ fn graphs_are_built_per_habit_in_habit_order() {
     }
 }
 
-use chrono::{Duration, Utc};
+use chrono::{Duration, Local};
 use habit_stack_rs::model::HabitStatus;
 use habit_stack_rs::view_model::{
-    habit_color, palette_hex, parse_hex, Scope, HABIT_PALETTE,
+    habit_color, palette_hex, parse_hex, Scope, ThemeMode, WeekStart, HABIT_PALETTE,
 };
 
 /// Returns the tempfile alongside the state so the DB outlives the test body.
@@ -44,7 +44,7 @@ fn state_with(habits: &[&str]) -> (AppState, Vec<uuid::Uuid>, NamedTempFile) {
 }
 
 fn mark(state: &mut AppState, id: uuid::Uuid, days_ago: i64, status: HabitStatus) {
-    let date = Utc::now().date_naive() - Duration::days(days_ago);
+    let date = Local::now().date_naive() - Duration::days(days_ago);
     state.storage.upsert_entry(id, date, status, None).unwrap();
 }
 
@@ -134,7 +134,7 @@ fn each_graph_only_reflects_its_own_habit() {
     mark(&mut state, ids[0], 0, HabitStatus::Done);
     state.refresh().unwrap();
 
-    let today = Utc::now().date_naive();
+    let today = Local::now().date_naive();
     let cell_for = |state: &AppState, habit_id: uuid::Uuid| {
         state
             .graphs
@@ -166,7 +166,7 @@ fn skipped_days_are_neither_done_nor_empty() {
     mark(&mut state, ids[0], 1, HabitStatus::Skipped);
     state.refresh().unwrap();
 
-    let date = Utc::now().date_naive() - Duration::days(1);
+    let date = Local::now().date_naive() - Duration::days(1);
     let cell = state.graphs[0]
         .weeks
         .iter()
@@ -249,18 +249,144 @@ fn recolouring_a_habit_persists_and_archiving_removes_it() {
 }
 
 #[test]
-fn theme_preference_survives_a_reload() {
+fn every_setting_survives_a_reload() {
     let tmp = NamedTempFile::new().unwrap();
     {
         let storage = Storage::new(tmp.path()).unwrap();
         let mut state = AppState::new(storage).unwrap();
-        assert!(state.dark_theme, "defaults to dark");
-        state.set_dark_theme(false).unwrap();
+        assert_eq!(state.theme_mode, ThemeMode::Dark, "defaults to dark");
+        assert_eq!(state.accent_index, None, "accent follows the first habit");
+        assert_eq!(state.graph_weeks, 17);
+        assert_eq!(state.week_start, WeekStart::Monday);
+
+        state.set_theme_mode(ThemeMode::System).unwrap();
+        state.set_accent_index(Some(3)).unwrap();
+        state.set_graph_weeks(26).unwrap();
+        state.set_week_start(WeekStart::Sunday).unwrap();
     }
 
     let storage = Storage::new(tmp.path()).unwrap();
     let state = AppState::new(storage).unwrap();
-    assert!(!state.dark_theme);
+    assert_eq!(state.theme_mode, ThemeMode::System);
+    assert_eq!(state.accent_index, Some(3));
+    assert_eq!(state.graph_weeks, 26);
+    assert_eq!(state.week_start, WeekStart::Sunday);
+    // An explicit accent overrides the first habit's colour.
+    assert_eq!(state.accent(), HABIT_PALETTE[3]);
+}
+
+#[test]
+fn the_old_dark_theme_key_is_carried_over() {
+    let tmp = NamedTempFile::new().unwrap();
+    {
+        // What an install from before theme modes existed looks like.
+        let storage = Storage::new(tmp.path()).unwrap();
+        storage.set_setting("dark_theme", "0").unwrap();
+    }
+    let storage = Storage::new(tmp.path()).unwrap();
+    let state = AppState::new(storage).unwrap();
+    assert_eq!(state.theme_mode, ThemeMode::Light);
+}
+
+#[test]
+fn graph_range_changes_the_window_length() {
+    let (mut state, _ids, _db) = state_with(&["Run"]);
+    let weeks_of = |s: &AppState| s.graphs[0].weeks.len();
+
+    state.set_graph_weeks(12).unwrap();
+    let short = weeks_of(&state);
+    state.set_graph_weeks(26).unwrap();
+    let long = weeks_of(&state);
+    assert!(long > short, "26 weeks must show more columns than 12");
+
+    // Anything off the menu is ignored rather than applied blindly.
+    state.set_graph_weeks(999).unwrap();
+    assert_eq!(state.graph_weeks, 26);
+}
+
+#[test]
+fn week_start_changes_which_day_leads_each_column() {
+    let (mut state, _ids, _db) = state_with(&["Run"]);
+
+    state.set_week_start(WeekStart::Monday).unwrap();
+    for week in &state.graphs[0].weeks {
+        assert_eq!(week.start_date.format("%a").to_string(), "Mon");
+    }
+    assert_eq!(state.week_start.labels()[0], "Mon");
+
+    state.set_week_start(WeekStart::Sunday).unwrap();
+    for week in &state.graphs[0].weeks {
+        assert_eq!(week.start_date.format("%a").to_string(), "Sun");
+    }
+    // Mon/Wed/Fri stay the labelled rows, just shifted down one.
+    assert_eq!(state.week_start.labels()[1], "Mon");
+    assert_eq!(state.week_start.labels()[3], "Wed");
+}
+
+#[test]
+fn reminders_round_trip_and_follow_the_habit() {
+    let (mut state, ids, _db) = state_with(&["Run", "Read"]);
+    let id = ids[0];
+
+    assert!(state.reminder_for(id).is_none(), "none by default");
+
+    state.set_reminder_enabled(id, true).unwrap();
+    let r = state.reminder_for(id).expect("created on enable");
+    assert!(r.enabled);
+    assert_eq!(r.label(), "09:00", "sensible default time");
+
+    state.shift_reminder_time(id, -2, 30).unwrap();
+    assert_eq!(state.reminder_for(id).unwrap().label(), "07:30");
+
+    // Wraps within the day rather than going negative.
+    state.shift_reminder_time(id, -8, 0).unwrap();
+    assert_eq!(state.reminder_for(id).unwrap().label(), "23:30");
+
+    // Clearing the last remaining day is refused: it would never fire.
+    for day in 0..7 {
+        state.toggle_reminder_day(id, day).unwrap();
+    }
+    assert_ne!(state.reminder_for(id).unwrap().days, 0);
+
+    // Archiving the habit takes its reminder with it (ON DELETE CASCADE is on
+    // delete; archive keeps the row, so it must not surface as due).
+    state.archive_habit(id).unwrap();
+    assert!(!state.due.iter().any(|d| d.habit_id == id));
+}
+
+#[test]
+fn disabling_a_reminder_that_never_existed_is_a_no_op() {
+    let (mut state, ids, _db) = state_with(&["Run"]);
+    state.set_reminder_enabled(ids[0], false).unwrap();
+    assert!(state.reminder_for(ids[0]).is_none(), "no empty row written");
+}
+
+#[test]
+fn a_due_reminder_clears_once_the_habit_is_done() {
+    let (mut state, ids, _db) = state_with(&["Run"]);
+    let id = ids[0];
+
+    state.set_reminder_enabled(id, true).unwrap();
+    // Force the time into the past so it is unambiguously due.
+    state.shift_reminder_time(id, -9, 0).unwrap();
+    state.recompute_due(Local::now().naive_local());
+    assert_eq!(state.due.len(), 1, "overdue and not done");
+
+    state.toggle_today_for_habit(id).unwrap();
+    state.recompute_due(Local::now().naive_local());
+    assert!(state.due.is_empty(), "ticking it clears the reminder");
+}
+
+#[test]
+fn sync_today_is_a_no_op_when_the_date_has_not_changed() {
+    let (mut state, _ids, _db) = state_with(&["Run"]);
+    assert_eq!(state.today, Local::now().date_naive());
+    assert!(!state.sync_today().unwrap(), "same day, no refresh");
+
+    // A stale date (an app left open past midnight) rolls forward.
+    state.today -= Duration::days(1);
+    assert!(state.sync_today().unwrap(), "rolled over");
+    assert_eq!(state.today, Local::now().date_naive());
 }
 
 #[test]
@@ -277,7 +403,7 @@ fn first_launch_creates_a_default_habit_with_a_colour() {
 #[test]
 fn future_days_are_flagged_but_never_marked_today() {
     let (state, _ids, _db) = state_with(&["Run"]);
-    let today = Utc::now().date_naive();
+    let today = Local::now().date_naive();
     let mut future = 0;
     for day in state.graphs[0].weeks.iter().flat_map(|w| w.days.iter()) {
         assert_eq!(day.is_today, day.date == today);

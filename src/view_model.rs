@@ -1,6 +1,7 @@
-use crate::model::{Habit, HabitEntry, HabitStatus};
+use crate::model::{Habit, HabitEntry, HabitStatus, Reminder};
+use crate::reminders::{self, DueReminder};
 use crate::storage::Storage;
-use chrono::{Datelike, Duration, NaiveDate, Utc};
+use chrono::{Datelike, Duration, Local, NaiveDate, NaiveDateTime, Weekday};
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
@@ -20,7 +21,99 @@ pub const HABIT_PALETTE: [(u8, u8, u8); 8] = [
     (0xF8, 0x71, 0x71), // rose
 ];
 
+/// Superseded by `SETTING_THEME_MODE`; still read once so an existing install
+/// keeps the theme it was using.
 pub const SETTING_DARK_THEME: &str = "dark_theme";
+pub const SETTING_THEME_MODE: &str = "theme_mode";
+pub const SETTING_ACCENT_INDEX: &str = "accent_index";
+pub const SETTING_GRAPH_WEEKS: &str = "graph_weeks";
+pub const SETTING_WEEK_START: &str = "week_start";
+
+/// Selectable graph window lengths, in weeks.
+pub const GRAPH_WEEK_CHOICES: [i64; 3] = [12, 17, 26];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThemeMode {
+    Dark,
+    Light,
+    System,
+}
+
+impl ThemeMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Dark => "dark",
+            Self::Light => "light",
+            Self::System => "system",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "dark" => Some(Self::Dark),
+            "light" => Some(Self::Light),
+            "system" => Some(Self::System),
+            _ => None,
+        }
+    }
+
+    /// Index the Slint side uses.
+    pub fn as_index(&self) -> i32 {
+        match self {
+            Self::Dark => 0,
+            Self::Light => 1,
+            Self::System => 2,
+        }
+    }
+
+    pub fn from_index(i: i32) -> Self {
+        match i {
+            1 => Self::Light,
+            2 => Self::System,
+            _ => Self::Dark,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WeekStart {
+    Monday,
+    Sunday,
+}
+
+impl WeekStart {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Monday => "mon",
+            Self::Sunday => "sun",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "mon" => Some(Self::Monday),
+            "sun" => Some(Self::Sunday),
+            _ => None,
+        }
+    }
+
+    /// Row index of `weekday` within a column that starts on this day.
+    pub fn row_of(&self, weekday: Weekday) -> i64 {
+        let from_monday = weekday.num_days_from_monday() as i64;
+        match self {
+            Self::Monday => from_monday,
+            Self::Sunday => (from_monday + 1) % 7,
+        }
+    }
+
+    /// Gutter captions, labelling Mon/Wed/Fri whichever day leads the column.
+    pub fn labels(&self) -> [&'static str; 7] {
+        match self {
+            Self::Monday => ["Mon", "", "Wed", "", "Fri", "", ""],
+            Self::Sunday => ["", "Mon", "", "Wed", "", "Fri", ""],
+        }
+    }
+}
 
 pub fn parse_hex(raw: &str) -> Option<(u8, u8, u8)> {
     let s = raw.trim().trim_start_matches('#');
@@ -109,21 +202,33 @@ pub struct AppState {
     pub graphs: Vec<HabitGraph>,
     /// Aggregated across every habit (`Scope::All`).
     pub totals: Stats,
-    pub dark_theme: bool,
+    pub reminders: Vec<Reminder>,
+    /// Recomputed each tick; drives the badges and banner.
+    pub due: Vec<DueReminder>,
+    pub theme_mode: ThemeMode,
+    /// `None` = follow the first habit's colour.
+    pub accent_index: Option<usize>,
+    pub graph_weeks: i64,
+    pub week_start: WeekStart,
     pub today: NaiveDate,
     pub window: (NaiveDate, NaiveDate),
 }
 
 impl AppState {
     pub fn new(storage: Storage) -> anyhow::Result<Self> {
-        let today = Utc::now().date_naive();
+        let today = Local::now().date_naive();
         let mut state = Self {
             storage,
             habits: Vec::new(),
             entries: Vec::new(),
             graphs: Vec::new(),
             totals: Stats::default(),
-            dark_theme: true,
+            reminders: Vec::new(),
+            due: Vec::new(),
+            theme_mode: ThemeMode::Dark,
+            accent_index: None,
+            graph_weeks: GRAPH_WEEKS,
+            week_start: WeekStart::Monday,
             today,
             window: Self::range_for_weeks_ending(today, GRAPH_WEEKS),
         };
@@ -139,12 +244,37 @@ impl AppState {
             self.storage.create_habit(&default)?;
             self.habits.push(default);
         }
-        self.dark_theme = self
-            .storage
-            .get_setting(SETTING_DARK_THEME)?
-            .map(|v| v == "1")
-            .unwrap_or(true);
+        self.load_settings()?;
         self.refresh()?;
+        Ok(())
+    }
+
+    fn load_settings(&mut self) -> anyhow::Result<()> {
+        self.theme_mode = match self.storage.get_setting(SETTING_THEME_MODE)? {
+            Some(raw) => ThemeMode::parse(&raw).unwrap_or(ThemeMode::Dark),
+            // Carry over the old boolean key from before modes existed.
+            None => match self.storage.get_setting(SETTING_DARK_THEME)?.as_deref() {
+                Some("0") => ThemeMode::Light,
+                _ => ThemeMode::Dark,
+            },
+        };
+        self.accent_index = self
+            .storage
+            .get_setting(SETTING_ACCENT_INDEX)?
+            .and_then(|v| v.parse::<i64>().ok())
+            .filter(|i| *i >= 0)
+            .map(|i| i as usize % HABIT_PALETTE.len());
+        self.graph_weeks = self
+            .storage
+            .get_setting(SETTING_GRAPH_WEEKS)?
+            .and_then(|v| v.parse::<i64>().ok())
+            .filter(|w| GRAPH_WEEK_CHOICES.contains(w))
+            .unwrap_or(GRAPH_WEEKS);
+        self.week_start = self
+            .storage
+            .get_setting(SETTING_WEEK_START)?
+            .and_then(|v| WeekStart::parse(&v))
+            .unwrap_or(WeekStart::Monday);
         Ok(())
     }
 
@@ -155,10 +285,11 @@ impl AppState {
     /// Reloads every habit's entries for the window, then rebuilds one graph
     /// per habit plus the aggregate totals.
     pub fn refresh(&mut self) -> anyhow::Result<()> {
-        self.window = Self::range_for_weeks_ending(self.today, GRAPH_WEEKS);
+        self.window = Self::range_for_weeks_ending(self.today, self.graph_weeks);
         let (start, end) = self.window;
         let ids: Vec<Uuid> = self.habits.iter().map(|h| h.id).collect();
         self.entries = self.storage.entries_for_period(&ids, start, end)?;
+        self.reminders = self.storage.list_reminders()?;
 
         // Built into locals first: `stats` borrows self immutably.
         let graphs: Vec<HabitGraph> = self
@@ -166,7 +297,14 @@ impl AppState {
             .iter()
             .map(|habit| HabitGraph {
                 habit_id: habit.id,
-                weeks: Self::build_weeks(start, end, &self.entries, habit.id, self.today),
+                weeks: Self::build_weeks(
+                    start,
+                    end,
+                    &self.entries,
+                    habit.id,
+                    self.today,
+                    self.week_start,
+                ),
                 stats: self.stats(Scope::Habit(habit.id)),
             })
             .collect();
@@ -174,6 +312,7 @@ impl AppState {
 
         self.graphs = graphs;
         self.totals = totals;
+        self.recompute_due(Local::now().naive_local());
         Ok(())
     }
 
@@ -183,15 +322,16 @@ impl AppState {
         entries: &[HabitEntry],
         habit_id: Uuid,
         today: NaiveDate,
+        week_start: WeekStart,
     ) -> Vec<WeekColumn> {
         let mut per_day: HashMap<NaiveDate, &HabitEntry> = HashMap::new();
         for e in entries.iter().filter(|e| e.habit_id == habit_id) {
             per_day.insert(e.date, e);
         }
 
-        // Snap back to Monday for GitHub-like calendar alignment.
+        // Snap back to the configured first day of the week so columns align.
         let mut cursor = start;
-        while cursor.weekday().num_days_from_monday() != 0 {
+        while week_start.row_of(cursor.weekday()) != 0 {
             cursor -= Duration::days(1);
         }
 
@@ -414,15 +554,154 @@ impl AppState {
         self.refresh()
     }
 
-    pub fn set_dark_theme(&mut self, dark: bool) -> anyhow::Result<()> {
-        self.dark_theme = dark;
-        self.storage
-            .set_setting(SETTING_DARK_THEME, if dark { "1" } else { "0" })
+    // ------------------------------------------------------------- settings
+
+    pub fn set_theme_mode(&mut self, mode: ThemeMode) -> anyhow::Result<()> {
+        self.theme_mode = mode;
+        self.storage.set_setting(SETTING_THEME_MODE, mode.as_str())
     }
 
-    /// Colour for app chrome (tab indicator, totals). Taken from the first
-    /// habit, since nothing is "selected" any more.
+    /// `None` reverts to following the first habit's colour.
+    pub fn set_accent_index(&mut self, index: Option<usize>) -> anyhow::Result<()> {
+        self.accent_index = index.map(|i| i % HABIT_PALETTE.len());
+        let raw = self.accent_index.map_or(-1, |i| i as i64).to_string();
+        self.storage.set_setting(SETTING_ACCENT_INDEX, &raw)
+    }
+
+    pub fn set_graph_weeks(&mut self, weeks: i64) -> anyhow::Result<()> {
+        if !GRAPH_WEEK_CHOICES.contains(&weeks) {
+            return Ok(());
+        }
+        self.graph_weeks = weeks;
+        self.storage
+            .set_setting(SETTING_GRAPH_WEEKS, &weeks.to_string())?;
+        self.refresh()
+    }
+
+    pub fn set_week_start(&mut self, week_start: WeekStart) -> anyhow::Result<()> {
+        self.week_start = week_start;
+        self.storage
+            .set_setting(SETTING_WEEK_START, week_start.as_str())?;
+        self.refresh()
+    }
+
+    // ------------------------------------------------------------ reminders
+
+    pub fn reminder_for(&self, habit_id: Uuid) -> Option<&Reminder> {
+        self.reminders.iter().find(|r| r.habit_id == habit_id)
+    }
+
+    /// Reads back the stored reminder, or a sensible unsaved default so the
+    /// editor always has something to show.
+    fn reminder_or_default(&self, habit_id: Uuid) -> Reminder {
+        self.reminder_for(habit_id)
+            .cloned()
+            .unwrap_or_else(|| Reminder::new(habit_id))
+    }
+
+    fn save_reminder(&mut self, reminder: Reminder) -> anyhow::Result<()> {
+        self.storage.upsert_reminder(&reminder)?;
+        self.reminders = self.storage.list_reminders()?;
+        self.recompute_due(Local::now().naive_local());
+        Ok(())
+    }
+
+    pub fn set_reminder_enabled(&mut self, habit_id: Uuid, enabled: bool) -> anyhow::Result<()> {
+        if !enabled && self.reminder_for(habit_id).is_none() {
+            return Ok(());
+        }
+        let mut reminder = self.reminder_or_default(habit_id);
+        reminder.enabled = enabled;
+        self.save_reminder(reminder)
+    }
+
+    /// Nudges the time by whole hours and/or minutes, wrapping within the day.
+    pub fn shift_reminder_time(
+        &mut self,
+        habit_id: Uuid,
+        hours: i32,
+        minutes: i32,
+    ) -> anyhow::Result<()> {
+        let mut reminder = self.reminder_or_default(habit_id);
+        let total = reminder.hour as i32 * 60 + reminder.minute as i32 + hours * 60 + minutes;
+        let wrapped = total.rem_euclid(24 * 60);
+        reminder.hour = (wrapped / 60) as u32;
+        reminder.minute = (wrapped % 60) as u32;
+        // Editing the time re-arms it for today.
+        reminder.last_fired = None;
+        self.save_reminder(reminder)
+    }
+
+    /// `day` is 0 = Monday … 6 = Sunday. Refuses to clear the last day, since a
+    /// reminder with no days would silently never fire.
+    pub fn toggle_reminder_day(&mut self, habit_id: Uuid, day: u32) -> anyhow::Result<()> {
+        if day > 6 {
+            return Ok(());
+        }
+        let mut reminder = self.reminder_or_default(habit_id);
+        let bit = 1u8 << day;
+        let next = reminder.days ^ bit;
+        if next == 0 {
+            return Ok(());
+        }
+        reminder.days = next;
+        self.save_reminder(reminder)
+    }
+
+    fn done_today_set(&self) -> HashSet<Uuid> {
+        self.habits
+            .iter()
+            .filter(|h| self.done_today(h.id))
+            .map(|h| h.id)
+            .collect()
+    }
+
+    /// Refreshes `due`; returns whether it changed, so the caller can avoid a
+    /// pointless UI push on a quiet tick.
+    pub fn recompute_due(&mut self, now: NaiveDateTime) -> bool {
+        let done = self.done_today_set();
+        let due = reminders::due_now(&self.reminders, &self.habits, &done, now);
+        let changed = due != self.due;
+        self.due = due;
+        changed
+    }
+
+    /// Reminders that should be announced now, marking each fired so a restart
+    /// or a throttled tick cannot announce it twice.
+    pub fn take_announcements(&mut self, now: NaiveDateTime) -> anyhow::Result<Vec<DueReminder>> {
+        let done = self.done_today_set();
+        let pending = reminders::to_announce(&self.reminders, &self.habits, &done, now);
+        for due in &pending {
+            self.storage.mark_reminder_fired(due.habit_id, now.date())?;
+            if let Some(r) = self
+                .reminders
+                .iter_mut()
+                .find(|r| r.habit_id == due.habit_id)
+            {
+                r.last_fired = Some(now.date());
+            }
+        }
+        Ok(pending)
+    }
+
+    /// Re-reads the local date, refreshing if it rolled over. Called from the
+    /// tick, which is what keeps a long-running window honest.
+    pub fn sync_today(&mut self) -> anyhow::Result<bool> {
+        let now = Local::now().date_naive();
+        if now == self.today {
+            return Ok(false);
+        }
+        self.today = now;
+        self.refresh()?;
+        Ok(true)
+    }
+
+    /// Colour for app chrome (tab indicator, totals): the Settings override if
+    /// one is set, else the first habit's colour.
     pub fn accent(&self) -> (u8, u8, u8) {
+        if let Some(index) = self.accent_index {
+            return HABIT_PALETTE[index % HABIT_PALETTE.len()];
+        }
         self.habits
             .first()
             .map(habit_color)

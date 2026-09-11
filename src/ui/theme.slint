@@ -1,8 +1,16 @@
+import { Palette } from "std-widgets.slint";
+
 // Single source of truth for every colour, space, radius and type size.
-// Flipping `dark` re-renders the whole app.
+// Flipping `mode` re-renders the whole app.
 
 export global Theme {
-    in-out property <bool> dark: true;
+    // 0 = dark, 1 = light, 2 = follow the OS.
+    in-out property <int> mode: 0;
+
+    // Derived, so Rust sets `mode` and every surface follows.
+    out property <bool> dark: mode == 2
+        ? (Palette.color-scheme == ColorScheme.dark)
+        : mode == 0;
 
     // Surfaces
     out property <color> bg: dark ? #09090B : #FAFAFA;

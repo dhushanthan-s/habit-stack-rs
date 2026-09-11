@@ -35,6 +35,14 @@ export struct HabitItem {
     done_today: bool,
     streak_label: string,
     created_label: string,
+    // Reminder time has passed today and the habit is not done.
+    due: bool,
+    reminder_on: bool,
+    // "07:00", or empty when no reminder is set.
+    reminder_label: string,
+    // Seven entries, index 0 = Monday. An array rather than a bitmask because
+    // Slint expressions have no bitwise operators.
+    reminder_days: [bool],
 }
 
 export struct HabitStats {
