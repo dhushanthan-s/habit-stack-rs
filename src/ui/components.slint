@@ -1,0 +1,450 @@
+import { Theme } from "theme.slint";
+import { HabitItem } from "types.slint";
+
+// ---------------------------------------------------------------- primitives
+
+export component Card inherits Rectangle {
+    background: Theme.surface;
+    border-radius: Theme.r_lg;
+    border-width: 1px;
+    border-color: Theme.border;
+}
+
+export component SectionLabel inherits Text {
+    font-size: Theme.fs_caption;
+    font-weight: 700;
+    letter-spacing: 1.2px;
+    color: Theme.text_faint;
+}
+
+// A colour dot, vertically centred inside whatever row holds it.
+export component Dot inherits VerticalLayout {
+    in property <color> tint;
+    in property <length> diameter: 9px;
+    alignment: center;
+    Rectangle {
+        width: root.diameter;
+        height: root.diameter;
+        border-radius: root.diameter / 2;
+        background: root.tint;
+    }
+}
+
+export component StatBlock inherits VerticalLayout {
+    in property <string> value;
+    in property <string> caption;
+    in property <color> tint: Theme.text;
+    spacing: 2px;
+
+    Text {
+        text: root.value;
+        font-size: Theme.fs_display;
+        font-weight: 700;
+        color: root.tint;
+        horizontal-alignment: center;
+    }
+    Text {
+        text: root.caption;
+        font-size: Theme.fs_caption;
+        font-weight: 500;
+        letter-spacing: 0.6px;
+        color: Theme.text_faint;
+        horizontal-alignment: center;
+    }
+}
+
+// -------------------------------------------------------------------- inputs
+
+export component CheckButton inherits Rectangle {
+    in property <bool> checked;
+    in property <color> tint;
+    callback clicked();
+
+    width: 44px;
+    height: 44px;
+
+    box := Rectangle {
+        width: 24px;
+        height: 24px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        border-radius: 8px;
+        background: root.checked ? root.tint : transparent;
+        border-width: root.checked ? 0px : 1.5px;
+        border-color: touch.pressed ? Theme.text_muted : Theme.border;
+        animate background, border-width, border-color {
+            duration: Theme.quick;
+            easing: ease-out;
+        }
+
+        if root.checked : Path {
+            x: 5px;
+            y: 5px;
+            width: 14px;
+            height: 14px;
+            viewbox-width: 14;
+            viewbox-height: 14;
+            commands: "M 2 7.4 L 5.4 11 L 12 3.6";
+            stroke: #09090B;
+            stroke-width: 2px;
+        }
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+export component TextField inherits Rectangle {
+    in property <string> placeholder;
+    in-out property <string> text <=> input.text;
+    callback accepted();
+
+    height: 44px;
+    // A TextInput narrower than 1px cannot take focus.
+    min-width: 1px;
+    border-radius: Theme.r_md;
+    background: Theme.surface_alt;
+    border-width: 1px;
+    border-color: input.has-focus ? Theme.text_faint : Theme.border;
+    // So tapping the padding, not just the glyphs, focuses the field.
+    forward-focus: input;
+    animate border-color {
+        duration: Theme.quick;
+        easing: ease-out;
+    }
+
+    input := TextInput {
+        x: Theme.sp_3;
+        y: 0;
+        width: root.width - Theme.sp_3 * 2;
+        height: root.height;
+        font-size: Theme.fs_body;
+        color: Theme.text;
+        vertical-alignment: center;
+        single-line: true;
+        accepted => {
+            root.accepted();
+        }
+    }
+
+    if input.text == "" && input.preedit-text == "" : Text {
+        x: Theme.sp_3;
+        y: 0;
+        width: root.width - Theme.sp_3 * 2;
+        height: root.height;
+        text: root.placeholder;
+        font-size: Theme.fs_body;
+        color: Theme.text_faint;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+}
+
+export component GhostButton inherits Rectangle {
+    in property <string> label;
+    in property <color> tint: Theme.text;
+    callback clicked();
+
+    height: 44px;
+    border-radius: Theme.r_md;
+    background: touch.pressed ? Theme.surface_alt : transparent;
+    animate background {
+        duration: Theme.quick;
+        easing: ease-out;
+    }
+
+    HorizontalLayout {
+        alignment: center;
+        spacing: Theme.sp_2;
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: root.label;
+                font-size: Theme.fs_label;
+                font-weight: 600;
+                color: root.tint;
+            }
+        }
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+export component ColorSwatch inherits Rectangle {
+    in property <color> swatch;
+    in property <bool> selected;
+    callback clicked();
+
+    width: 30px;
+    height: 30px;
+    border-radius: 15px;
+    border-width: root.selected ? 2px : 0px;
+    border-color: Theme.text;
+
+    Rectangle {
+        width: root.selected ? 20px : 26px;
+        height: self.width;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        border-radius: self.width / 2;
+        background: root.swatch;
+        animate width {
+            duration: Theme.quick;
+            easing: ease-out;
+        }
+    }
+
+    TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+export component Chip inherits Rectangle {
+    in property <string> label;
+    in property <color> tint;
+    in property <bool> selected;
+    in property <bool> show_dot: true;
+    callback clicked();
+
+    height: 34px;
+    border-radius: Theme.r_full;
+    background: root.selected ? root.tint.with_alpha(0.16) : Theme.surface_alt;
+    border-width: 1px;
+    border-color: root.selected ? root.tint.with_alpha(0.55) : Theme.border;
+    animate background, border-color {
+        duration: Theme.quick;
+        easing: ease-out;
+    }
+
+    HorizontalLayout {
+        padding-left: root.show_dot ? Theme.sp_3 : Theme.sp_4;
+        padding-right: Theme.sp_4;
+        spacing: Theme.sp_2;
+
+        if root.show_dot : Dot {
+            tint: root.tint;
+            diameter: 8px;
+        }
+
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: root.label;
+                font-size: Theme.fs_label;
+                font-weight: 500;
+                color: root.selected ? Theme.text : Theme.text_muted;
+            }
+        }
+    }
+
+    TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// ---------------------------------------------------------------------- rows
+
+export component HabitRow inherits Rectangle {
+    in property <HabitItem> item;
+    in property <bool> show_check: true;
+    in property <string> subtitle: root.item.streak_label;
+    /// When false the row body is inert and only the checkbox reacts.
+    in property <bool> selectable: true;
+    callback toggled();
+    callback picked();
+
+    height: 60px;
+    border-radius: Theme.r_md;
+    background: (root.selectable && touch.pressed) ? Theme.surface_alt : transparent;
+    animate background {
+        duration: Theme.quick;
+        easing: ease-out;
+    }
+
+    // Declared first so the checkbox below sits on top of it and wins the tap.
+    touch := TouchArea {
+        enabled: root.selectable;
+        clicked => {
+            root.picked();
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: Theme.sp_4;
+        padding-right: Theme.sp_1;
+        spacing: Theme.sp_3;
+
+        Dot {
+            tint: root.item.color;
+        }
+
+        VerticalLayout {
+            alignment: center;
+            spacing: 3px;
+
+            Text {
+                text: root.item.name;
+                font-size: Theme.fs_body;
+                font-weight: 500;
+                color: Theme.text;
+                overflow: elide;
+            }
+            Text {
+                text: root.subtitle;
+                font-size: Theme.fs_caption;
+                color: Theme.text_faint;
+                overflow: elide;
+            }
+        }
+
+        if root.show_check : CheckButton {
+            checked: root.item.done_today;
+            tint: root.item.color;
+            clicked => {
+                root.toggled();
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------------ tab icons
+
+component IconToday inherits Rectangle {
+    in property <color> tint;
+    width: 18px;
+    height: 18px;
+    Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: 18;
+        viewbox-height: 18;
+        commands: "M 3 9.5 L 7 13.5 L 15 4.5";
+        stroke: root.tint;
+        stroke-width: 2px;
+    }
+}
+
+component IconGraph inherits Rectangle {
+    in property <color> tint;
+    width: 18px;
+    height: 18px;
+    VerticalLayout {
+        alignment: center;
+        spacing: 2px;
+        for row in [0, 1, 2] : HorizontalLayout {
+            alignment: center;
+            spacing: 2px;
+            for col in [0, 1, 2] : Rectangle {
+                width: 4px;
+                height: 4px;
+                border-radius: 1px;
+                background: root.tint;
+                opacity: (row + col) < 1 ? 0.3 : ((row + col) < 3 ? 0.65 : 1.0);
+            }
+        }
+    }
+}
+
+component IconHabits inherits Rectangle {
+    in property <color> tint;
+    width: 18px;
+    height: 18px;
+    VerticalLayout {
+        alignment: center;
+        spacing: 4px;
+        for row in [0, 1, 2] : HorizontalLayout {
+            spacing: 4px;
+            Dot {
+                tint: root.tint;
+                diameter: 4px;
+            }
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    height: 2px;
+                    border-radius: 1px;
+                    background: root.tint;
+                    opacity: 0.55;
+                }
+            }
+        }
+    }
+}
+
+export component TabBar inherits Rectangle {
+    in property <color> tint;
+    in-out property <int> current;
+
+    height: 62px;
+    background: Theme.bg;
+
+    // Hairline divider with the active indicator riding on top of it.
+    Rectangle {
+        y: 0;
+        height: 1px;
+        background: Theme.border;
+    }
+
+    Rectangle {
+        y: 0;
+        height: 2px;
+        width: 26px;
+        border-radius: 1px;
+        background: root.tint;
+        x: (root.width / 3) * root.current + (root.width / 3 - self.width) / 2;
+        animate x {
+            duration: Theme.quick;
+            easing: ease-out;
+        }
+    }
+
+    HorizontalLayout {
+        padding-top: Theme.sp_2;
+
+        for tab[i] in [ "Graph", "Today", "Habits" ] : Rectangle {
+            VerticalLayout {
+                alignment: center;
+                spacing: 5px;
+
+                HorizontalLayout {
+                    alignment: center;
+                    if i == 0 : IconGraph {
+                        tint: i == root.current ? root.tint : Theme.text_faint;
+                    }
+                    if i == 1 : IconToday {
+                        tint: i == root.current ? root.tint : Theme.text_faint;
+                    }
+                    if i == 2 : IconHabits {
+                        tint: i == root.current ? root.tint : Theme.text_faint;
+                    }
+                }
+
+                Text {
+                    text: tab;
+                    font-size: Theme.fs_caption;
+                    font-weight: i == root.current ? 700 : 500;
+                    letter-spacing: 0.4px;
+                    color: i == root.current ? Theme.text : Theme.text_faint;
+                    horizontal-alignment: center;
+                }
+            }
+
+            TouchArea {
+                clicked => {
+                    root.current = i;
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,286 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { HabitGraph, HabitItem, HabitStats } from "types.slint";
+import {
+    Card, SectionLabel, StatBlock, Dot, HabitRow, ColorSwatch,
+    TextField, GhostButton,
+} from "components.slint";
+import { ContributionGraph, GraphKey } from "graph.slint";
+
+// Landing page: totals, then one self-contained block per habit.
+export component GraphPage inherits VerticalLayout {
+    in property <[HabitGraph]> graphs;
+    in property <HabitStats> totals;
+    in property <color> accent;
+    in property <string> summary_label;
+
+    spacing: Theme.sp_4;
+
+    Card {
+        VerticalLayout {
+            padding: Theme.sp_5;
+            spacing: Theme.sp_3;
+
+            HorizontalLayout {
+                StatBlock {
+                    value: root.totals.streak;
+                    caption: "STREAK";
+                    tint: root.accent;
+                }
+                StatBlock {
+                    value: root.totals.rate;
+                    caption: "RATE";
+                }
+                StatBlock {
+                    value: root.totals.done;
+                    caption: "DONE";
+                }
+            }
+
+            Text {
+                text: root.summary_label;
+                font-size: Theme.fs_caption;
+                color: Theme.text_faint;
+                horizontal-alignment: center;
+                overflow: elide;
+            }
+
+            GraphKey {
+                tint: root.accent;
+            }
+        }
+    }
+
+    for graph in root.graphs : Card {
+        VerticalLayout {
+            padding: Theme.sp_4;
+            spacing: Theme.sp_3;
+
+            HorizontalLayout {
+                spacing: Theme.sp_2;
+                alignment: start;
+
+                Dot {
+                    tint: graph.color;
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: graph.name;
+                        font-size: Theme.fs_body;
+                        font-weight: 600;
+                        color: Theme.text;
+                        overflow: elide;
+                    }
+                }
+            }
+
+            ContributionGraph {
+                weeks: graph.weeks;
+                tint: graph.color;
+            }
+
+            Rectangle {
+                height: 1px;
+                background: Theme.border;
+            }
+
+            Text {
+                text: graph.summary;
+                font-size: Theme.fs_caption;
+                color: Theme.text_faint;
+                overflow: elide;
+            }
+        }
+    }
+
+    if root.graphs.length == 0 : Card {
+        VerticalLayout {
+            padding: Theme.sp_6;
+            spacing: Theme.sp_2;
+
+            Text {
+                text: "Nothing tracked yet";
+                font-size: Theme.fs_body;
+                font-weight: 600;
+                color: Theme.text;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: "Add a habit on the Today tab and its graph appears here.";
+                font-size: Theme.fs_caption;
+                color: Theme.text_faint;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+    }
+}
+
+export component TodayPage inherits VerticalLayout {
+    in property <[HabitItem]> habits;
+    in property <[color]> palette;
+    in-out property <string> new_habit_name;
+    in-out property <int> new_color_index;
+
+    callback toggle(id: string);
+    callback add();
+
+    property <bool> adding: false;
+
+    spacing: Theme.sp_4;
+
+    SectionLabel {
+        text: "TODAY";
+    }
+
+    Card {
+        VerticalLayout {
+            padding: Theme.sp_2;
+            spacing: 2px;
+
+            for habit in root.habits : HabitRow {
+                item: habit;
+                selectable: false;
+                toggled => {
+                    root.toggle(habit.id);
+                }
+            }
+
+            Rectangle {
+                height: 1px;
+                background: Theme.border;
+            }
+
+            if !root.adding : GhostButton {
+                label: "+   Add a habit";
+                tint: Theme.text_muted;
+                clicked => {
+                    root.adding = true;
+                }
+            }
+
+            if root.adding : VerticalLayout {
+                padding: Theme.sp_2;
+                spacing: Theme.sp_3;
+
+                TextField {
+                    placeholder: "Habit name";
+                    text <=> root.new_habit_name;
+                    accepted => {
+                        root.add();
+                        root.adding = false;
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: Theme.sp_2;
+                    alignment: start;
+                    for tone[i] in root.palette : ColorSwatch {
+                        swatch: tone;
+                        selected: i == root.new_color_index;
+                        clicked => {
+                            root.new_color_index = i;
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: Theme.sp_2;
+                    GhostButton {
+                        label: "Cancel";
+                        tint: Theme.text_faint;
+                        clicked => {
+                            root.adding = false;
+                            root.new_habit_name = "";
+                        }
+                    }
+                    GhostButton {
+                        label: "Add habit";
+                        tint: root.palette[root.new_color_index];
+                        clicked => {
+                            root.add();
+                            root.adding = false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component HabitsPage inherits VerticalLayout {
+    in property <[HabitItem]> habits;
+    in property <[color]> palette;
+
+    callback recolor(id: string, index: int);
+    callback archive(id: string);
+
+    property <string> editing_id: "";
+
+    spacing: Theme.sp_4;
+
+    SectionLabel {
+        text: "ALL HABITS";
+    }
+
+    Card {
+        VerticalLayout {
+            padding: Theme.sp_2;
+            spacing: 2px;
+
+            for habit in root.habits : VerticalLayout {
+                spacing: 0px;
+
+                HabitRow {
+                    item: habit;
+                    subtitle: habit.created_label;
+                    show_check: false;
+                    picked => {
+                        root.editing_id = root.editing_id == habit.id ? "" : habit.id;
+                    }
+                }
+
+                if root.editing_id == habit.id : VerticalLayout {
+                    padding-left: Theme.sp_4;
+                    padding-right: Theme.sp_2;
+                    padding-bottom: Theme.sp_3;
+                    spacing: Theme.sp_3;
+
+                    HorizontalLayout {
+                        spacing: Theme.sp_2;
+                        alignment: start;
+                        for tone[i] in root.palette : ColorSwatch {
+                            swatch: tone;
+                            selected: habit.color == tone;
+                            clicked => {
+                                root.recolor(habit.id, i);
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        alignment: start;
+                        GhostButton {
+                            label: "Archive habit";
+                            tint: #F87171;
+                            clicked => {
+                                root.archive(habit.id);
+                                root.editing_id = "";
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Text {
+        text: "Tap a habit to change its colour or archive it.";
+        font-size: Theme.fs_caption;
+        color: Theme.text_faint;
+        horizontal-alignment: center;
+        wrap: word-wrap;
+    }
+}

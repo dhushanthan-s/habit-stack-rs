@@ -1,0 +1,45 @@
+// Data contract shared with Rust. Every field that is rendered as text is
+// pre-formatted on the Rust side, so no number or date formatting happens in
+// the markup.
+
+export struct GraphDay {
+    date: string,
+    done: bool,
+    // Rendered as a neutral tint rather than a completion.
+    skipped: bool,
+    is_today: bool,
+    is_future: bool,
+    has_note: bool,
+}
+
+export struct GraphWeek {
+    // Empty except on weeks that open a new month.
+    month_label: string,
+    days: [GraphDay],
+}
+
+// One self-contained block on the Graph page: a habit, its grid, and its
+// stats line.
+export struct HabitGraph {
+    id: string,
+    name: string,
+    color: color,
+    weeks: [GraphWeek],
+    summary: string,
+}
+
+export struct HabitItem {
+    id: string,
+    name: string,
+    color: color,
+    done_today: bool,
+    streak_label: string,
+    created_label: string,
+}
+
+export struct HabitStats {
+    streak: string,
+    rate: string,
+    done: string,
+    range_label: string,
+}

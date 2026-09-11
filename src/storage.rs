@@ -53,6 +53,11 @@ impl Storage {
 
             CREATE INDEX IF NOT EXISTS idx_entries_habit_date
                 ON habit_entries (habit_id, date);
+
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             "#,
         )?;
         Ok(())
@@ -157,6 +162,35 @@ impl Storage {
         };
 
         let _ = entry_id;
+        Ok(())
+    }
+
+    pub fn update_habit_color(&self, habit_id: Uuid, hex: &str) -> anyhow::Result<()> {
+        self.conn.execute(
+            "UPDATE habits SET color = ?1 WHERE id = ?2",
+            params![hex, habit_id.to_string()],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_setting(&self, key: &str) -> anyhow::Result<Option<String>> {
+        let value = self
+            .conn
+            .query_row(
+                "SELECT value FROM app_settings WHERE key = ?1",
+                params![key],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(value)
+    }
+
+    pub fn set_setting(&self, key: &str, value: &str) -> anyhow::Result<()> {
+        self.conn.execute(
+            r#"INSERT INTO app_settings (key, value) VALUES (?1, ?2)
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value"#,
+            params![key, value],
+        )?;
         Ok(())
     }
 
