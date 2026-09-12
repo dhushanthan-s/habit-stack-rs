@@ -1,0 +1,53 @@
+import { Palette } from "std-widgets.slint";
+
+// Single source of truth for every colour, space, radius and type size.
+// Flipping `mode` re-renders the whole app.
+
+export global Theme {
+    // 0 = dark, 1 = light, 2 = follow the OS.
+    in-out property <int> mode: 0;
+
+    // Derived, so Rust sets `mode` and every surface follows.
+    out property <bool> dark: mode == 2
+        ? (Palette.color-scheme == ColorScheme.dark)
+        : mode == 0;
+
+    // Surfaces
+    out property <color> bg: dark ? #09090B : #FAFAFA;
+    out property <color> surface: dark ? #131316 : #FFFFFF;
+    out property <color> surface_alt: dark ? #1C1C21 : #F4F4F5;
+    out property <color> border: dark ? #232328 : #E4E4E7;
+
+    // Text
+    out property <color> text: dark ? #FAFAFA : #18181B;
+    out property <color> text_muted: dark ? #A1A1AA : #71717A;
+    out property <color> text_faint: dark ? #52525B : #A1A1AA;
+
+    // Grid
+    out property <color> grid_empty: dark ? #1A1A1F : #EBEBEF;
+    out property <color> grid_skipped: dark ? #3F3F46 : #D4D4D8;
+
+    // Spacing scale
+    out property <length> sp_1: 4px;
+    out property <length> sp_2: 8px;
+    out property <length> sp_3: 12px;
+    out property <length> sp_4: 16px;
+    out property <length> sp_5: 24px;
+    out property <length> sp_6: 32px;
+
+    // Radii
+    out property <length> r_sm: 4px;
+    out property <length> r_md: 10px;
+    out property <length> r_lg: 16px;
+    out property <length> r_full: 999px;
+
+    // Type scale
+    out property <length> fs_caption: 11px;
+    out property <length> fs_label: 13px;
+    out property <length> fs_body: 15px;
+    out property <length> fs_title: 20px;
+    out property <length> fs_display: 26px;
+
+    // Motion
+    out property <duration> quick: 160ms;
+}

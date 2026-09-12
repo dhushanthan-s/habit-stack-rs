@@ -1,0 +1,516 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { HabitGraph, HabitItem, HabitStats } from "types.slint";
+import {
+    Card, SectionLabel, StatBlock, Dot, HabitRow, ColorSwatch,
+    TextField, GhostButton, Toggle, Stepper, DayToggle, Segmented, SettingRow,
+} from "components.slint";
+import { ContributionGraph, GraphKey } from "graph.slint";
+
+// Landing page: totals, then one self-contained block per habit.
+export component GraphPage inherits VerticalLayout {
+    in property <[HabitGraph]> graphs;
+    in property <HabitStats> totals;
+    in property <color> accent;
+    in property <string> summary_label;
+    in property <[string]> weekday_labels;
+
+    spacing: Theme.sp_4;
+
+    Card {
+        VerticalLayout {
+            padding: Theme.sp_5;
+            spacing: Theme.sp_3;
+
+            HorizontalLayout {
+                StatBlock {
+                    value: root.totals.streak;
+                    caption: "STREAK";
+                    tint: root.accent;
+                }
+                StatBlock {
+                    value: root.totals.rate;
+                    caption: "RATE";
+                }
+                StatBlock {
+                    value: root.totals.done;
+                    caption: "DONE";
+                }
+            }
+
+            Text {
+                text: root.summary_label;
+                font-size: Theme.fs_caption;
+                color: Theme.text_faint;
+                horizontal-alignment: center;
+                overflow: elide;
+            }
+
+            GraphKey {
+                tint: root.accent;
+            }
+        }
+    }
+
+    for graph in root.graphs : Card {
+        VerticalLayout {
+            padding: Theme.sp_4;
+            spacing: Theme.sp_3;
+
+            HorizontalLayout {
+                spacing: Theme.sp_2;
+                alignment: start;
+
+                Dot {
+                    tint: graph.color;
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: graph.name;
+                        font-size: Theme.fs_body;
+                        font-weight: 600;
+                        color: Theme.text;
+                        overflow: elide;
+                    }
+                }
+            }
+
+            ContributionGraph {
+                weeks: graph.weeks;
+                tint: graph.color;
+                weekday_labels: root.weekday_labels;
+            }
+
+            Rectangle {
+                height: 1px;
+                background: Theme.border;
+            }
+
+            Text {
+                text: graph.summary;
+                font-size: Theme.fs_caption;
+                color: Theme.text_faint;
+                overflow: elide;
+            }
+        }
+    }
+
+    if root.graphs.length == 0 : Card {
+        VerticalLayout {
+            padding: Theme.sp_6;
+            spacing: Theme.sp_2;
+
+            Text {
+                text: "Nothing tracked yet";
+                font-size: Theme.fs_body;
+                font-weight: 600;
+                color: Theme.text;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: "Add a habit on the Today tab and its graph appears here.";
+                font-size: Theme.fs_caption;
+                color: Theme.text_faint;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+    }
+}
+
+export component TodayPage inherits VerticalLayout {
+    in property <[HabitItem]> habits;
+    in property <[color]> palette;
+    in property <color> accent;
+    in property <int> due_count;
+    in property <string> due_label;
+    in-out property <string> new_habit_name;
+    in-out property <int> new_color_index;
+
+    callback toggle(id: string);
+    callback add();
+
+    property <bool> adding: false;
+
+    spacing: Theme.sp_4;
+
+    if root.due_count > 0 : Card {
+        background: root.accent.with_alpha(0.12);
+        border-color: root.accent.with_alpha(0.4);
+
+        HorizontalLayout {
+            padding: Theme.sp_4;
+            spacing: Theme.sp_3;
+            alignment: start;
+
+            Dot {
+                tint: root.accent;
+            }
+
+            VerticalLayout {
+                alignment: center;
+                Text {
+                    text: root.due_label;
+                    font-size: Theme.fs_label;
+                    font-weight: 600;
+                    color: Theme.text;
+                    overflow: elide;
+                }
+            }
+        }
+    }
+
+    SectionLabel {
+        text: "TODAY";
+    }
+
+    Card {
+        VerticalLayout {
+            padding: Theme.sp_2;
+            spacing: 2px;
+
+            for habit in root.habits : HabitRow {
+                item: habit;
+                selectable: false;
+                toggled => {
+                    root.toggle(habit.id);
+                }
+            }
+
+            Rectangle {
+                height: 1px;
+                background: Theme.border;
+            }
+
+            if !root.adding : GhostButton {
+                label: "+   Add a habit";
+                tint: Theme.text_muted;
+                clicked => {
+                    root.adding = true;
+                }
+            }
+
+            if root.adding : VerticalLayout {
+                padding: Theme.sp_2;
+                spacing: Theme.sp_3;
+
+                TextField {
+                    placeholder: "Habit name";
+                    text <=> root.new_habit_name;
+                    accepted => {
+                        root.add();
+                        root.adding = false;
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: Theme.sp_2;
+                    alignment: start;
+                    for tone[i] in root.palette : ColorSwatch {
+                        swatch: tone;
+                        selected: i == root.new_color_index;
+                        clicked => {
+                            root.new_color_index = i;
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: Theme.sp_2;
+                    GhostButton {
+                        label: "Cancel";
+                        tint: Theme.text_faint;
+                        clicked => {
+                            root.adding = false;
+                            root.new_habit_name = "";
+                        }
+                    }
+                    GhostButton {
+                        label: "Add habit";
+                        tint: root.palette[root.new_color_index];
+                        clicked => {
+                            root.add();
+                            root.adding = false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component HabitsPage inherits VerticalLayout {
+    in property <[HabitItem]> habits;
+    in property <[color]> palette;
+    in property <[string]> day_labels;
+
+    callback recolor(id: string, index: int);
+    callback archive(id: string);
+    callback reminder_toggled(id: string, on: bool);
+    callback reminder_shift(id: string, hours: int, minutes: int);
+    callback reminder_day_toggled(id: string, day: int);
+
+    property <string> editing_id: "";
+
+    spacing: Theme.sp_4;
+
+    SectionLabel {
+        text: "ALL HABITS";
+    }
+
+    Card {
+        VerticalLayout {
+            padding: Theme.sp_2;
+            spacing: 2px;
+
+            for habit in root.habits : VerticalLayout {
+                spacing: 0px;
+
+                HabitRow {
+                    item: habit;
+                    subtitle: habit.created_label;
+                    show_check: false;
+                    show_due: false;
+                    picked => {
+                        root.editing_id = root.editing_id == habit.id ? "" : habit.id;
+                    }
+                }
+
+                if root.editing_id == habit.id : VerticalLayout {
+                    padding-left: Theme.sp_4;
+                    padding-right: Theme.sp_2;
+                    padding-bottom: Theme.sp_3;
+                    spacing: Theme.sp_3;
+
+                    HorizontalLayout {
+                        spacing: Theme.sp_2;
+                        alignment: start;
+                        for tone[i] in root.palette : ColorSwatch {
+                            swatch: tone;
+                            selected: habit.color == tone;
+                            clicked => {
+                                root.recolor(habit.id, i);
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        height: 1px;
+                        background: Theme.border;
+                    }
+
+                    HorizontalLayout {
+                        spacing: Theme.sp_3;
+
+                        VerticalLayout {
+                            alignment: center;
+                            Text {
+                                text: "Remind me";
+                                font-size: Theme.fs_body;
+                                font-weight: 500;
+                                color: Theme.text;
+                            }
+                        }
+
+                        VerticalLayout {
+                            alignment: center;
+                            Toggle {
+                                on: habit.reminder_on;
+                                tint: habit.color;
+                                toggled(on) => {
+                                    root.reminder_toggled(habit.id, on);
+                                }
+                            }
+                        }
+                    }
+
+                    if habit.reminder_on : VerticalLayout {
+                        spacing: Theme.sp_3;
+
+                        HorizontalLayout {
+                            spacing: Theme.sp_2;
+                            alignment: start;
+
+                            VerticalLayout {
+                                alignment: center;
+                                Text {
+                                    text: "Time";
+                                    font-size: Theme.fs_label;
+                                    color: Theme.text_muted;
+                                    min-width: 46px;
+                                }
+                            }
+
+                            Stepper {
+                                value: habit.reminder_label;
+                                step(delta) => {
+                                    root.reminder_shift(habit.id, delta, 0);
+                                }
+                            }
+
+                            Stepper {
+                                value: "5m";
+                                step(delta) => {
+                                    root.reminder_shift(habit.id, 0, delta * 5);
+                                }
+                            }
+                        }
+
+                        HorizontalLayout {
+                            spacing: Theme.sp_1;
+                            alignment: start;
+                            for on[day] in habit.reminder_days : DayToggle {
+                                label: root.day_labels[day];
+                                on: on;
+                                tint: habit.color;
+                                clicked => {
+                                    root.reminder_day_toggled(habit.id, day);
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        height: 1px;
+                        background: Theme.border;
+                    }
+
+                    HorizontalLayout {
+                        alignment: start;
+                        GhostButton {
+                            label: "Archive habit";
+                            tint: #F87171;
+                            clicked => {
+                                root.archive(habit.id);
+                                root.editing_id = "";
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Text {
+        text: "Tap a habit to change its colour or archive it.";
+        font-size: Theme.fs_caption;
+        color: Theme.text_faint;
+        horizontal-alignment: center;
+        wrap: word-wrap;
+    }
+}
+
+export component SettingsPage inherits VerticalLayout {
+    in property <[color]> palette;
+    in property <color> accent;
+    in property <int> theme_mode;
+    /// -1 follows the first habit's colour.
+    in property <int> accent_index;
+    in property <int> graph_weeks;
+    in property <bool> week_start_sunday;
+
+    callback theme_mode_picked(index: int);
+    callback accent_picked(index: int);
+    callback graph_weeks_picked(weeks: int);
+    callback week_start_picked(sunday: bool);
+
+    spacing: Theme.sp_4;
+
+    SectionLabel {
+        text: "APPEARANCE";
+    }
+
+    Card {
+        VerticalLayout {
+            padding: Theme.sp_4;
+            spacing: Theme.sp_5;
+
+            SettingRow {
+                label: "Theme";
+                hint: "System follows your OS appearance.";
+                Segmented {
+                    options: [ "Dark", "Light", "System" ];
+                    selected: root.theme_mode;
+                    picked(index) => {
+                        root.theme_mode_picked(index);
+                    }
+                }
+            }
+
+            SettingRow {
+                label: "Accent";
+                hint: "Used for the tab indicator and totals. Auto follows your first habit.";
+
+                HorizontalLayout {
+                    spacing: Theme.sp_2;
+                    alignment: start;
+
+                    ColorSwatch {
+                        swatch: root.accent_index == -1 ? root.accent : Theme.surface_alt;
+                        selected: root.accent_index == -1;
+                        clicked => {
+                            root.accent_picked(-1);
+                        }
+                    }
+
+                    Rectangle {
+                        width: 1px;
+                        background: Theme.border;
+                    }
+
+                    for tone[i] in root.palette : ColorSwatch {
+                        swatch: tone;
+                        selected: i == root.accent_index;
+                        clicked => {
+                            root.accent_picked(i);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    SectionLabel {
+        text: "GRAPH";
+    }
+
+    Card {
+        VerticalLayout {
+            padding: Theme.sp_4;
+            spacing: Theme.sp_5;
+
+            SettingRow {
+                label: "History shown";
+                hint: "Longer ranges pack the cells tighter.";
+                Segmented {
+                    options: [ "12 weeks", "17 weeks", "26 weeks" ];
+                    selected: root.graph_weeks == 12 ? 0 : (root.graph_weeks == 26 ? 2 : 1);
+                    picked(index) => {
+                        root.graph_weeks_picked(index == 0 ? 12 : (index == 2 ? 26 : 17));
+                    }
+                }
+            }
+
+            SettingRow {
+                label: "Week starts on";
+                hint: "";
+                Segmented {
+                    options: [ "Monday", "Sunday" ];
+                    selected: root.week_start_sunday ? 1 : 0;
+                    picked(index) => {
+                        root.week_start_picked(index == 1);
+                    }
+                }
+            }
+        }
+    }
+
+    Text {
+        text: "All data stays on this device.";
+        font-size: Theme.fs_caption;
+        color: Theme.text_faint;
+        horizontal-alignment: center;
+    }
+}

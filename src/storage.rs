@@ -1,4 +1,4 @@
-use crate::model::{Habit, HabitEntry, HabitStatus};
+use crate::model::{Habit, HabitEntry, HabitStatus, Reminder};
 use chrono::NaiveDate;
 use directories::ProjectDirs;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -53,6 +53,20 @@ impl Storage {
 
             CREATE INDEX IF NOT EXISTS idx_entries_habit_date
                 ON habit_entries (habit_id, date);
+
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS habit_reminders (
+                habit_id TEXT PRIMARY KEY
+                    REFERENCES habits(id) ON DELETE CASCADE,
+                time TEXT NOT NULL,
+                days INTEGER NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                last_fired TEXT
+            );
             "#,
         )?;
         Ok(())
@@ -157,6 +171,113 @@ impl Storage {
         };
 
         let _ = entry_id;
+        Ok(())
+    }
+
+    pub fn update_habit_color(&self, habit_id: Uuid, hex: &str) -> anyhow::Result<()> {
+        self.conn.execute(
+            "UPDATE habits SET color = ?1 WHERE id = ?2",
+            params![hex, habit_id.to_string()],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_reminders(&self) -> anyhow::Result<Vec<Reminder>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT habit_id, time, days, enabled, last_fired FROM habit_reminders",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let habit_id_str: String = row.get(0)?;
+            let habit_id = Uuid::parse_str(&habit_id_str).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    0,
+                    rusqlite::types::Type::Text,
+                    Box::new(e),
+                )
+            })?;
+            let time_str: String = row.get(1)?;
+            let (hour, minute) = Reminder::parse_time(&time_str).ok_or_else(|| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    1,
+                    rusqlite::types::Type::Text,
+                    "invalid reminder time".into(),
+                )
+            })?;
+            let days: i64 = row.get(2)?;
+            let enabled: i64 = row.get(3)?;
+            let last_fired: Option<String> = row.get(4)?;
+            Ok(Reminder {
+                habit_id,
+                hour,
+                minute,
+                days: days as u8,
+                enabled: enabled != 0,
+                last_fired: last_fired
+                    .and_then(|d| NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok()),
+            })
+        })?;
+
+        let mut reminders = Vec::new();
+        for r in rows {
+            reminders.push(r?);
+        }
+        Ok(reminders)
+    }
+
+    pub fn upsert_reminder(&self, reminder: &Reminder) -> anyhow::Result<()> {
+        self.conn.execute(
+            r#"INSERT INTO habit_reminders (habit_id, time, days, enabled, last_fired)
+               VALUES (?1, ?2, ?3, ?4, ?5)
+               ON CONFLICT(habit_id) DO UPDATE SET
+                   time = excluded.time,
+                   days = excluded.days,
+                   enabled = excluded.enabled,
+                   last_fired = excluded.last_fired"#,
+            params![
+                reminder.habit_id.to_string(),
+                reminder.time_string(),
+                reminder.days as i64,
+                if reminder.enabled { 1 } else { 0 },
+                reminder.last_fired.map(|d| d.to_string()),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn clear_reminder(&self, habit_id: Uuid) -> anyhow::Result<()> {
+        self.conn.execute(
+            "DELETE FROM habit_reminders WHERE habit_id = ?1",
+            params![habit_id.to_string()],
+        )?;
+        Ok(())
+    }
+
+    pub fn mark_reminder_fired(&self, habit_id: Uuid, date: NaiveDate) -> anyhow::Result<()> {
+        self.conn.execute(
+            "UPDATE habit_reminders SET last_fired = ?1 WHERE habit_id = ?2",
+            params![date.to_string(), habit_id.to_string()],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_setting(&self, key: &str) -> anyhow::Result<Option<String>> {
+        let value = self
+            .conn
+            .query_row(
+                "SELECT value FROM app_settings WHERE key = ?1",
+                params![key],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(value)
+    }
+
+    pub fn set_setting(&self, key: &str, value: &str) -> anyhow::Result<()> {
+        self.conn.execute(
+            r#"INSERT INTO app_settings (key, value) VALUES (?1, ?2)
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value"#,
+            params![key, value],
+        )?;
         Ok(())
     }
 
