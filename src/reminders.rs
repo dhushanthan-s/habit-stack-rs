@@ -5,8 +5,9 @@
 //! and the Android notification receiver share one implementation of "is this
 //! actually due?" rather than each growing their own.
 
-use crate::model::{Habit, Reminder};
-use chrono::{Datelike, NaiveDateTime, NaiveTime};
+use crate::model::{Habit, HabitStatus, Reminder};
+use crate::storage::Storage;
+use chrono::{Datelike, Duration, NaiveDateTime, NaiveTime};
 use std::collections::HashSet;
 use uuid::Uuid;
 
@@ -70,4 +71,41 @@ pub fn to_announce(
         .into_iter()
         .filter(|d| !fired.contains(&d.habit_id))
         .collect()
+}
+
+/// The next moment any enabled reminder fires, searching forward a full week.
+/// Pure, so the Android alarm scheduler and its tests share one definition of
+/// "when next".
+pub fn next_fire_after(reminders: &[Reminder], now: NaiveDateTime) -> Option<NaiveDateTime> {
+    let enabled: Vec<&Reminder> = reminders.iter().filter(|r| r.enabled).collect();
+    if enabled.is_empty() {
+        return None;
+    }
+
+    // Day 0 is today (times later than `now` only), then the next seven days.
+    (0..=7).find_map(|offset| {
+        let date = now.date() + Duration::days(offset);
+        enabled
+            .iter()
+            .filter(|r| r.fires_on(date.weekday()))
+            .map(|r| date.and_time(r.time_of_day()))
+            .filter(|candidate| *candidate > now)
+            .min()
+    })
+}
+
+/// Gathers the inputs `due_now` needs straight from storage. Used by the
+/// Android receiver, which runs with no `AppState` around.
+pub fn scan(storage: &Storage, now: NaiveDateTime) -> anyhow::Result<Vec<DueReminder>> {
+    let habits = storage.list_habits(false)?;
+    let reminders = storage.list_reminders()?;
+    let today = now.date();
+    let ids: Vec<Uuid> = habits.iter().map(|h| h.id).collect();
+    let done: HashSet<Uuid> = storage
+        .entries_for_period(&ids, today, today)?
+        .into_iter()
+        .filter(|e| e.status == HabitStatus::Done)
+        .map(|e| e.habit_id)
+        .collect();
+    Ok(to_announce(&reminders, &habits, &done, now))
 }

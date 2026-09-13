@@ -1,9 +1,20 @@
 use crate::model::{Habit, HabitEntry, HabitStatus, Reminder};
 use chrono::NaiveDate;
+#[cfg(not(target_os = "android"))]
 use directories::ProjectDirs;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
+
+/// Set once from `android_main`, before any storage call.
+#[cfg(target_os = "android")]
+static ANDROID_DATA_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Records the activity's internal data directory as the home for `habits.db`.
+#[cfg(target_os = "android")]
+pub fn set_android_data_dir(dir: PathBuf) {
+    let _ = ANDROID_DATA_DIR.set(dir);
+}
 
 pub struct Storage {
     conn: Connection,
@@ -11,11 +22,26 @@ pub struct Storage {
 
 impl Storage {
     pub fn app_db_path() -> anyhow::Result<PathBuf> {
+        let dir = Self::app_data_dir()?;
+        std::fs::create_dir_all(&dir)?;
+        Ok(dir.join("habits.db"))
+    }
+
+    #[cfg(not(target_os = "android"))]
+    fn app_data_dir() -> anyhow::Result<PathBuf> {
         let proj = ProjectDirs::from("dev", "HabitStack", "habit_stack_rs")
             .ok_or_else(|| anyhow::anyhow!("Could not determine app data directory"))?;
-        let dir = proj.data_dir();
-        std::fs::create_dir_all(dir)?;
-        Ok(dir.join("habits.db"))
+        Ok(proj.data_dir().to_path_buf())
+    }
+
+    /// On Android `directories` has no writable location to offer, so the path
+    /// comes from the activity instead - see `set_android_data_dir`.
+    #[cfg(target_os = "android")]
+    fn app_data_dir() -> anyhow::Result<PathBuf> {
+        ANDROID_DATA_DIR
+            .get()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("Android data dir not set; call set_android_data_dir"))
     }
 
     pub fn new_with_default_path() -> anyhow::Result<Self> {

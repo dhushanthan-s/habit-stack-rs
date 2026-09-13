@@ -26,6 +26,9 @@ export component AppWindow inherits Window {
     in property <[string]> day_labels;
     in property <int> due_count;
     in property <string> due_label;
+    // Supplied by the Android activity; zero on desktop.
+    in property <length> top_inset;
+    in property <length> bottom_inset;
     in property <int> theme_mode;
     in property <int> accent_index;
     in property <int> graph_weeks;
@@ -52,7 +55,7 @@ export component AppWindow inherits Window {
         VerticalLayout {
             padding-left: Theme.sp_5;
             padding-right: Theme.sp_4;
-            padding-top: Theme.sp_4;
+            padding-top: Theme.sp_4 + root.top_inset;
             padding-bottom: Theme.sp_4;
             spacing: 2px;
 
@@ -155,6 +158,7 @@ export component AppWindow inherits Window {
             tint: root.accent;
             current <=> root.active_tab;
             badge: root.due_count;
+            bottom_inset: root.bottom_inset;
         }
     }
 }

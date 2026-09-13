@@ -1,0 +1,16 @@
+# Android cross-compilation. Points cargo at the NDK's clang wrapper, which
+# doubles as the linker and already knows the sysroot and API level.
+#
+# API 24 is the minimum the wrapper name encodes; bump the "24" in all three
+# paths together to raise minSdk. Update the NDK version here after an upgrade.
+
+[target.aarch64-linux-android]
+# Android 15+ devices may use 16 KB memory pages; the NDK still defaults to 4 KB
+# alignment, which triggers a compatibility warning and a slower fallback mode.
+rustflags = ["-C", "link-arg=-Wl,-z,max-page-size=16384"]
+linker = "/Users/dhushan-21130/Library/Android/sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android24-clang"
+
+[env]
+ANDROID_NDK_HOME = "/Users/dhushan-21130/Library/Android/sdk/ndk/27.2.12479018"
+CC_aarch64_linux_android = "/Users/dhushan-21130/Library/Android/sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android24-clang"
+AR_aarch64_linux_android = "/Users/dhushan-21130/Library/Android/sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ar"

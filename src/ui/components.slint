@@ -664,10 +664,12 @@ export component TabBar inherits Rectangle {
     in-out property <int> current;
     /// Count shown on the Today tab; hidden when zero.
     in property <int> badge;
+    /// Gesture-bar height on Android; zero on desktop.
+    in property <length> bottom_inset;
 
     property <[string]> labels: [ "Graph", "Today", "Habits", "Settings" ];
 
-    height: 62px;
+    height: 62px + root.bottom_inset;
     background: Theme.bg;
 
     // Hairline divider with the active indicator riding on top of it.
@@ -693,6 +695,7 @@ export component TabBar inherits Rectangle {
 
     HorizontalLayout {
         padding-top: Theme.sp_2;
+        padding-bottom: root.bottom_inset;
 
         for tab[i] in root.labels : Rectangle {
             VerticalLayout {

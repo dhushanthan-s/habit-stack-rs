@@ -133,3 +133,61 @@ fn reminder_helpers_round_trip() {
     assert_eq!(Reminder::parse_time("08:60"), None, "minute out of range");
     assert_eq!(Reminder::parse_time("nonsense"), None);
 }
+
+// ---------------------------------------------------------- next_fire_after
+
+use habit_stack_rs::reminders::next_fire_after;
+
+#[test]
+fn next_fire_finds_later_today_before_tomorrow() {
+    let (_h, mut morning) = fixture(); // 08:00, every day
+    morning.hour = 8;
+    let mut evening = Reminder::new(Uuid::new_v4());
+    evening.hour = 21;
+
+    // At 07:00 the next fire is this morning.
+    let next = next_fire_after(&[morning.clone(), evening.clone()], at(7, 0)).unwrap();
+    assert_eq!(next, at(8, 0));
+
+    // At 09:00 the morning one has passed, so the evening one is next.
+    let next = next_fire_after(&[morning.clone(), evening.clone()], at(9, 0)).unwrap();
+    assert_eq!(next, at(21, 0));
+
+    // After the last one, it rolls to tomorrow's earliest.
+    let next = next_fire_after(&[morning, evening], at(22, 0)).unwrap();
+    assert_eq!(next.date(), at(8, 0).date().succ_opt().unwrap());
+    assert_eq!(next.time(), NaiveTime::from_hms_opt(8, 0, 0).unwrap());
+}
+
+#[test]
+fn next_fire_skips_to_the_next_selected_weekday() {
+    let (_h, mut reminder) = fixture();
+    // Mondays only; 2026-09-11 is a Friday, so the next is Monday the 14th.
+    reminder.days = MONDAY;
+    reminder.hour = 6;
+
+    let next = next_fire_after(&[reminder], at(12, 0)).unwrap();
+    assert_eq!(next.date(), NaiveDate::from_ymd_opt(2026, 9, 14).unwrap());
+    assert_eq!(next.time(), NaiveTime::from_hms_opt(6, 0, 0).unwrap());
+}
+
+#[test]
+fn next_fire_is_none_without_an_enabled_reminder() {
+    let (_h, mut reminder) = fixture();
+    assert!(next_fire_after(&[], at(9, 0)).is_none(), "no reminders");
+
+    reminder.enabled = false;
+    assert!(
+        next_fire_after(&[reminder], at(9, 0)).is_none(),
+        "disabled reminders must not schedule an alarm"
+    );
+}
+
+#[test]
+fn next_fire_is_strictly_after_now() {
+    let (_h, reminder) = fixture(); // 08:00
+    // Exactly on the boundary must roll forward, or the alarm would re-fire
+    // immediately in a loop.
+    let next = next_fire_after(&[reminder], at(8, 0)).unwrap();
+    assert_eq!(next.date(), at(8, 0).date().succ_opt().unwrap());
+}
