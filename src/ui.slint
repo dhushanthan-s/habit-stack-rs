@@ -1,11 +1,11 @@
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "ui/theme.slint";
-import { GraphDay, GraphWeek, HabitGraph, HabitItem, HabitStats } from "ui/types.slint";
+import { GraphDay, GraphWeek, HabitGraph, HabitItem, HabitStats, ReminderView } from "ui/types.slint";
 import { TabBar } from "ui/components.slint";
 import { TodayPage, GraphPage, HabitsPage, SettingsPage } from "ui/pages.slint";
 
 // Re-exported so slint-build generates the matching Rust types.
-export { GraphDay, GraphWeek, HabitGraph, HabitItem, HabitStats, Theme }
+export { GraphDay, GraphWeek, HabitGraph, HabitItem, HabitStats, ReminderView, Theme }
 
 export component AppWindow inherits Window {
     title: "Habit Stack";
@@ -20,6 +20,7 @@ export component AppWindow inherits Window {
     in property <string> summary_label;
     in property <[HabitItem]> habits;
     in property <[color]> palette;
+    in property <[string]> emoji_palette;
     in property <color> accent;
     in property <string> today_label;
     in property <[string]> weekday_labels;
@@ -36,15 +37,25 @@ export component AppWindow inherits Window {
 
     in-out property <string> new_habit_name;
     in-out property <int> new_color_index;
+    /// -1 means no emoji.
+    in-out property <int> new_emoji_index;
+    in property <ReminderView> new_reminder;
     in-out property <int> active_tab;
 
     callback toggle_today(id: string);
-    callback add_habit_requested(name: string, color_index: int);
+    callback add_habit_requested(name: string, color_index: int, emoji_index: int);
+    callback add_cancelled();
     callback set_habit_color(id: string, color_index: int);
-    callback archive_habit(id: string);
+    callback set_habit_emoji(id: string, emoji_index: int);
+    callback delete_habit(id: string);
+    // Reminder callbacks take an empty id for the add form's draft.
     callback reminder_toggled(id: string, on: bool);
     callback reminder_shift(id: string, hours: int, minutes: int);
     callback reminder_day_toggled(id: string, day: int);
+    callback reminder_kind_picked(id: string, kind: int);
+    callback reminder_interval_shift(id: string, delta: int);
+    callback reminder_month_day_shift(id: string, delta: int);
+    callback reminder_date_shift(id: string, days: int, months: int);
     callback theme_mode_picked(index: int);
     callback accent_picked(index: int);
     callback graph_weeks_picked(weeks: int);
@@ -95,29 +106,38 @@ export component AppWindow inherits Window {
 
                 if root.active_tab == 1 : TodayPage {
                     habits: root.habits;
-                    palette: root.palette;
                     accent: root.accent;
                     due_count: root.due_count;
                     due_label: root.due_label;
-                    new_habit_name <=> root.new_habit_name;
-                    new_color_index <=> root.new_color_index;
                     toggle(id) => {
                         root.toggle_today(id);
-                    }
-                    add => {
-                        root.add_habit_requested(root.new_habit_name, root.new_color_index);
                     }
                 }
 
                 if root.active_tab == 2 : HabitsPage {
                     habits: root.habits;
                     palette: root.palette;
+                    emoji_palette: root.emoji_palette;
                     day_labels: root.day_labels;
+                    new_habit_name <=> root.new_habit_name;
+                    new_color_index <=> root.new_color_index;
+                    new_emoji_index <=> root.new_emoji_index;
+                    new_reminder: root.new_reminder;
+                    add => {
+                        root.add_habit_requested(
+                            root.new_habit_name, root.new_color_index, root.new_emoji_index);
+                    }
+                    cancel_add => {
+                        root.add_cancelled();
+                    }
                     recolor(id, index) => {
                         root.set_habit_color(id, index);
                     }
-                    archive(id) => {
-                        root.archive_habit(id);
+                    set_emoji(id, index) => {
+                        root.set_habit_emoji(id, index);
+                    }
+                    delete(id) => {
+                        root.delete_habit(id);
                     }
                     reminder_toggled(id, on) => {
                         root.reminder_toggled(id, on);
@@ -127,6 +147,18 @@ export component AppWindow inherits Window {
                     }
                     reminder_day_toggled(id, day) => {
                         root.reminder_day_toggled(id, day);
+                    }
+                    reminder_kind_picked(id, kind) => {
+                        root.reminder_kind_picked(id, kind);
+                    }
+                    reminder_interval_shift(id, delta) => {
+                        root.reminder_interval_shift(id, delta);
+                    }
+                    reminder_month_day_shift(id, delta) => {
+                        root.reminder_month_day_shift(id, delta);
+                    }
+                    reminder_date_shift(id, days, months) => {
+                        root.reminder_date_shift(id, days, months);
                     }
                 }
 

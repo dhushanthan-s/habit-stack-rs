@@ -26,8 +26,10 @@ fn graphs_are_built_per_habit_in_habit_order() {
 
 use chrono::{Duration, Local};
 use habit_stack_rs::model::HabitStatus;
+use habit_stack_rs::model::ScheduleKind;
 use habit_stack_rs::view_model::{
-    habit_color, palette_hex, parse_hex, Scope, ThemeMode, WeekStart, HABIT_PALETTE,
+    habit_color, palette_hex, parse_hex, ReminderTarget, Scope, ThemeMode, WeekStart,
+    HABIT_PALETTE,
 };
 
 /// Returns the tempfile alongside the state so the DB outlives the test body.
@@ -230,7 +232,7 @@ fn palette_index_round_trips_through_hex() {
 }
 
 #[test]
-fn recolouring_a_habit_persists_and_archiving_removes_it() {
+fn recolouring_a_habit_persists_and_deleting_removes_it() {
     let (mut state, ids, _db) = state_with(&["Run", "Read"]);
     let id = ids[0];
 
@@ -239,12 +241,17 @@ fn recolouring_a_habit_persists_and_archiving_removes_it() {
     assert_eq!(stored.color.as_deref(), Some(palette_hex(1).as_str()));
     assert_eq!(habit_color(stored), HABIT_PALETTE[1]);
 
-    state.archive_habit(id).unwrap();
+    mark(&mut state, id, 0, HabitStatus::Done);
+    state.delete_habit(id).unwrap();
     assert!(!state.habits.iter().any(|h| h.id == id));
     assert_eq!(state.habits.len(), 1);
-    // The archived habit's block goes with it.
+    // Gone from storage outright, not merely hidden like an archived habit.
+    let everything = state.storage.list_habits(true).unwrap();
+    assert!(!everything.iter().any(|h| h.id == id));
+    // Its block goes with it, and its check-in no longer counts anywhere.
     assert_eq!(state.graphs.len(), 1);
     assert!(!state.graphs.iter().any(|g| g.habit_id == id));
+    assert!(!state.entries.iter().any(|e| e.habit_id == id));
     assert_eq!(state.totals, state.stats(Scope::All));
 }
 
@@ -330,34 +337,83 @@ fn reminders_round_trip_and_follow_the_habit() {
 
     assert!(state.reminder_for(id).is_none(), "none by default");
 
-    state.set_reminder_enabled(id, true).unwrap();
+    state.set_reminder_enabled(ReminderTarget::Habit(id), true).unwrap();
     let r = state.reminder_for(id).expect("created on enable");
     assert!(r.enabled);
     assert_eq!(r.label(), "09:00", "sensible default time");
 
-    state.shift_reminder_time(id, -2, 30).unwrap();
+    state.shift_reminder_time(ReminderTarget::Habit(id), -2, 30).unwrap();
     assert_eq!(state.reminder_for(id).unwrap().label(), "07:30");
 
     // Wraps within the day rather than going negative.
-    state.shift_reminder_time(id, -8, 0).unwrap();
+    state.shift_reminder_time(ReminderTarget::Habit(id), -8, 0).unwrap();
     assert_eq!(state.reminder_for(id).unwrap().label(), "23:30");
 
     // Clearing the last remaining day is refused: it would never fire.
     for day in 0..7 {
-        state.toggle_reminder_day(id, day).unwrap();
+        state.toggle_reminder_day(ReminderTarget::Habit(id), day).unwrap();
     }
     assert_ne!(state.reminder_for(id).unwrap().days, 0);
 
-    // Archiving the habit takes its reminder with it (ON DELETE CASCADE is on
-    // delete; archive keeps the row, so it must not surface as due).
-    state.archive_habit(id).unwrap();
+    // Deleting the habit takes its reminder row with it via ON DELETE CASCADE.
+    state.delete_habit(id).unwrap();
+    assert!(state.reminder_for(id).is_none());
     assert!(!state.due.iter().any(|d| d.habit_id == id));
+}
+
+#[test]
+fn a_draft_reminder_is_saved_only_when_the_habit_is_added() {
+    let (mut state, _ids, _db) = state_with(&["Run"]);
+    assert!(!state.draft_reminder.enabled, "the add form starts with it off");
+
+    state
+        .set_reminder_enabled(ReminderTarget::Draft, true)
+        .unwrap();
+    state
+        .shift_reminder_time(ReminderTarget::Draft, -2, 30)
+        .unwrap();
+    state
+        .set_reminder_kind(ReminderTarget::Draft, ScheduleKind::EveryNDays)
+        .unwrap();
+    state
+        .shift_reminder_interval(ReminderTarget::Draft, 2)
+        .unwrap();
+
+    // Editing the draft writes nothing and never counts as due.
+    assert!(state.storage.list_reminders().unwrap().is_empty());
+    assert!(state.reminders.is_empty());
+    assert_eq!(state.draft_reminder.label(), "07:30");
+
+    let draft = state.draft_reminder.clone();
+    let id = state
+        .add_habit("Read".to_string(), 2, None, Some(draft))
+        .unwrap();
+
+    let saved = state.reminder_for(id).expect("saved with the habit");
+    assert!(saved.enabled);
+    assert_eq!(saved.label(), "07:30");
+    assert_eq!(saved.kind, ScheduleKind::EveryNDays);
+    assert_eq!(saved.interval_days, 3);
+    assert_eq!(saved.start_date, state.today);
+    assert_eq!(state.reminders.len(), 1, "no stray row for the draft's nil id");
+
+    state.reset_draft_reminder();
+    assert!(!state.draft_reminder.enabled);
+    assert_eq!(state.draft_reminder.label(), "09:00");
+}
+
+#[test]
+fn adding_a_habit_without_a_reminder_saves_none() {
+    let (mut state, _ids, _db) = state_with(&["Run"]);
+    let id = state.add_habit("Read".to_string(), 0, None, None).unwrap();
+    assert!(state.reminder_for(id).is_none());
+    assert!(state.storage.list_reminders().unwrap().is_empty());
 }
 
 #[test]
 fn disabling_a_reminder_that_never_existed_is_a_no_op() {
     let (mut state, ids, _db) = state_with(&["Run"]);
-    state.set_reminder_enabled(ids[0], false).unwrap();
+    state.set_reminder_enabled(ReminderTarget::Habit(ids[0]), false).unwrap();
     assert!(state.reminder_for(ids[0]).is_none(), "no empty row written");
 }
 
@@ -366,9 +422,9 @@ fn a_due_reminder_clears_once_the_habit_is_done() {
     let (mut state, ids, _db) = state_with(&["Run"]);
     let id = ids[0];
 
-    state.set_reminder_enabled(id, true).unwrap();
+    state.set_reminder_enabled(ReminderTarget::Habit(id), true).unwrap();
     // Force the time into the past so it is unambiguously due.
-    state.shift_reminder_time(id, -9, 0).unwrap();
+    state.shift_reminder_time(ReminderTarget::Habit(id), -9, 0).unwrap();
     state.recompute_due(Local::now().naive_local());
     assert_eq!(state.due.len(), 1, "overdue and not done");
 

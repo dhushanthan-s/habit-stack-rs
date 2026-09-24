@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { HabitItem } from "types.slint";
+import { HabitItem, ReminderView } from "types.slint";
 
 // ---------------------------------------------------------------- primitives
 
@@ -27,6 +27,33 @@ export component Dot inherits VerticalLayout {
         height: root.diameter;
         border-radius: root.diameter / 2;
         background: root.tint;
+    }
+}
+
+/// A habit's emoji in a tinted circle, falling back to the plain colour dot.
+/// Mirrors `Dot`'s shape - a centred VerticalLayout - so swapping one for the
+/// other does not shift any row geometry.
+export component HabitMark inherits VerticalLayout {
+    in property <string> emoji;
+    in property <color> tint;
+    in property <length> diameter: 22px;
+
+    alignment: center;
+
+    Rectangle {
+        width: root.emoji == "" ? 9px : root.diameter;
+        height: self.width;
+        border-radius: self.width / 2;
+        background: root.emoji == "" ? root.tint : root.tint.with_alpha(0.18);
+
+        if root.emoji != "" : Text {
+            text: root.emoji;
+            font-size: Theme.fs_label;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            width: 100%;
+            height: 100%;
+        }
     }
 }
 
@@ -180,16 +207,18 @@ export component GhostButton inherits Rectangle {
 export component ColorSwatch inherits Rectangle {
     in property <color> swatch;
     in property <bool> selected;
+    /// Settable so a crowded row can shrink instead of overflowing its card.
+    in property <length> diameter: 30px;
     callback clicked();
 
-    width: 30px;
-    height: 30px;
-    border-radius: 15px;
+    width: root.diameter;
+    height: root.diameter;
+    border-radius: root.diameter / 2;
     border-width: root.selected ? 2px : 0px;
     border-color: Theme.text;
 
     Rectangle {
-        width: root.selected ? 20px : 26px;
+        width: root.selected ? root.diameter * 0.67 : root.diameter * 0.87;
         height: self.width;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
@@ -286,7 +315,8 @@ export component HabitRow inherits Rectangle {
         padding-right: Theme.sp_1;
         spacing: Theme.sp_3;
 
-        Dot {
+        HabitMark {
+            emoji: root.item.emoji;
             tint: root.item.color;
         }
 
@@ -552,6 +582,149 @@ export component SettingRow inherits VerticalLayout {
     @children
 }
 
+/// "Remind me" plus the schedule controls. Used both when editing a habit and
+/// in the add form, so the callbacks carry no id; the page supplies it.
+export component ReminderEditor inherits VerticalLayout {
+    in property <ReminderView> reminder;
+    in property <color> tint;
+    /// Monday-first single letters for the weekday toggles.
+    in property <[string]> day_labels;
+
+    callback toggled(on: bool);
+    callback shift(hours: int, minutes: int);
+    callback day_toggled(day: int);
+    callback kind_picked(kind: int);
+    callback interval_shift(delta: int);
+    callback month_day_shift(delta: int);
+    callback date_shift(days: int, months: int);
+
+    spacing: Theme.sp_3;
+
+    HorizontalLayout {
+        spacing: Theme.sp_3;
+
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: "Remind me";
+                font-size: Theme.fs_body;
+                font-weight: 500;
+                color: Theme.text;
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            Toggle {
+                on: root.reminder.on;
+                tint: root.tint;
+                toggled(on) => {
+                    root.toggled(on);
+                }
+            }
+        }
+    }
+
+    if root.reminder.on : VerticalLayout {
+        spacing: Theme.sp_3;
+
+        Text {
+            text: root.reminder.summary;
+            font-size: Theme.fs_caption;
+            color: Theme.text_faint;
+            wrap: word-wrap;
+        }
+
+        // Captions sit above their controls rather than beside them: two
+        // steppers plus an inline label do not fit across a 320px window.
+        SectionLabel {
+            text: "TIME";
+        }
+
+        HorizontalLayout {
+            spacing: Theme.sp_2;
+            alignment: start;
+
+            Stepper {
+                value: root.reminder.time_label;
+                step(delta) => {
+                    root.shift(delta, 0);
+                }
+            }
+
+            Stepper {
+                value: "5m";
+                step(delta) => {
+                    root.shift(0, delta * 5);
+                }
+            }
+        }
+
+        SectionLabel {
+            text: "REPEATS";
+        }
+
+        Segmented {
+            options: [ "Weekly", "Interval", "Monthly", "Once" ];
+            selected: root.reminder.kind;
+            picked(index) => {
+                root.kind_picked(index);
+            }
+        }
+
+        if root.reminder.kind == 0 : HorizontalLayout {
+            spacing: Theme.sp_1;
+            alignment: start;
+            for on[day] in root.reminder.days : DayToggle {
+                label: root.day_labels[day];
+                on: on;
+                tint: root.tint;
+                clicked => {
+                    root.day_toggled(day);
+                }
+            }
+        }
+
+        if root.reminder.kind == 1 : HorizontalLayout {
+            alignment: start;
+            Stepper {
+                value: root.reminder.interval_label;
+                step(delta) => {
+                    root.interval_shift(delta);
+                }
+            }
+        }
+
+        if root.reminder.kind == 2 : HorizontalLayout {
+            alignment: start;
+            Stepper {
+                value: root.reminder.month_day_label;
+                step(delta) => {
+                    root.month_day_shift(delta);
+                }
+            }
+        }
+
+        if root.reminder.kind == 3 : VerticalLayout {
+            spacing: Theme.sp_2;
+
+            Stepper {
+                value: root.reminder.date_label;
+                step(delta) => {
+                    root.date_shift(delta, 0);
+                }
+            }
+
+            Stepper {
+                value: "1 month";
+                step(delta) => {
+                    root.date_shift(0, delta);
+                }
+            }
+        }
+    }
+}
+
 // ------------------------------------------------------------------ tab icons
 
 component IconToday inherits Rectangle {
@@ -750,6 +923,148 @@ export component TabBar inherits Rectangle {
                     root.current = i;
                 }
             }
+        }
+    }
+}
+
+
+// -------------------------------------------------------------- wrap grids
+//
+// Slint has no flex-wrap, so these follow the same approach as
+// ContributionGraph: a plain Rectangle whose children are placed at computed
+// x/y and whose height is derived from the row count. Wrapping is what keeps
+// the swatch rows inside their card at phone widths - a single row of nine
+// 30px swatches needs 343px and never had that much room.
+
+export component SwatchGrid inherits Rectangle {
+    in property <[color]> tones;
+    /// Index into `tones`; -1 selects the leading "auto" cell, -2 selects
+    /// nothing.
+    in property <int> selected_index: -2;
+    /// Shows a leading cell that stands for "follow the first habit".
+    in property <bool> show_auto: false;
+    in property <color> auto_tone;
+    in property <int> columns: 5;
+    in property <length> cell: 30px;
+    callback picked(index: int);
+
+    property <length> gap: Theme.sp_2;
+    property <int> lead: root.show_auto ? 1 : 0;
+    property <int> count: root.tones.length + root.lead;
+    // Ceiling division written so it holds whether `/` yields a float or
+    // truncates: floor((a + b - 1) / b) == ceil(a / b) either way. Getting
+    // this wrong by one row would draw the last swatches outside the pinned
+    // height.
+    property <int> rows:
+        Math.max(Math.floor((root.count + root.columns - 1) / root.columns), 1);
+    property <length> grid_height: root.rows * root.cell + (root.rows - 1) * root.gap;
+
+    // min == max pins the height inside the parent layout; Slint rejects an
+    // explicit `height` alongside them.
+    min-height: root.grid_height;
+    max-height: root.grid_height;
+
+    if root.show_auto : ColorSwatch {
+        x: 0;
+        y: 0;
+        diameter: root.cell;
+        swatch: root.auto_tone;
+        selected: root.selected_index == -1;
+        clicked => {
+            root.picked(-1);
+        }
+    }
+
+    for tone[i] in root.tones : ColorSwatch {
+        x: Math.mod(i + root.lead, root.columns) * (root.cell + root.gap);
+        y: Math.floor((i + root.lead) / root.columns) * (root.cell + root.gap);
+        diameter: root.cell;
+        swatch: tone;
+        selected: i == root.selected_index;
+        clicked => {
+            root.picked(i);
+        }
+    }
+}
+
+component EmojiCell inherits Rectangle {
+    in property <string> glyph;
+    in property <bool> selected;
+    in property <length> cell: 32px;
+    callback clicked();
+
+    width: root.cell;
+    height: root.cell;
+    border-radius: Theme.r_md;
+    background: root.selected ? Theme.surface_alt : transparent;
+    border-width: root.selected ? 2px : 1px;
+    border-color: root.selected ? Theme.text : Theme.border;
+    animate background, border-color {
+        duration: Theme.quick;
+        easing: ease-out;
+    }
+
+    Text {
+        text: root.glyph == "" ? "\u{2013}" : root.glyph;
+        font-size: root.glyph == "" ? Theme.fs_label : Theme.fs_body;
+        color: Theme.text_faint;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        width: 100%;
+        height: 100%;
+    }
+
+    TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+export component EmojiGrid inherits Rectangle {
+    in property <[string]> emojis;
+    /// The habit's current emoji; empty selects the leading "none" cell.
+    in property <string> selected_emoji;
+    in property <int> columns: 6;
+    in property <length> cell: 32px;
+    /// -1 clears the emoji.
+    callback picked(index: int);
+
+    property <length> gap: Theme.sp_2;
+    property <int> count: root.emojis.length + 1;
+    // Ceiling division written so it holds whether `/` yields a float or
+    // truncates: floor((a + b - 1) / b) == ceil(a / b) either way. Getting
+    // this wrong by one row would draw the last swatches outside the pinned
+    // height.
+    property <int> rows:
+        Math.max(Math.floor((root.count + root.columns - 1) / root.columns), 1);
+    property <length> grid_height: root.rows * root.cell + (root.rows - 1) * root.gap;
+
+    // min == max pins the height inside the parent layout; Slint rejects an
+    // explicit `height` alongside them.
+    min-height: root.grid_height;
+    max-height: root.grid_height;
+
+    // Leading "no emoji" cell, drawn as a dash.
+    EmojiCell {
+        x: 0;
+        y: 0;
+        cell: root.cell;
+        glyph: "";
+        selected: root.selected_emoji == "";
+        clicked => {
+            root.picked(-1);
+        }
+    }
+
+    for glyph[i] in root.emojis : EmojiCell {
+        x: Math.mod(i + 1, root.columns) * (root.cell + root.gap);
+        y: Math.floor((i + 1) / root.columns) * (root.cell + root.gap);
+        cell: root.cell;
+        glyph: glyph;
+        selected: root.selected_emoji == glyph;
+        clicked => {
+            root.picked(i);
         }
     }
 }

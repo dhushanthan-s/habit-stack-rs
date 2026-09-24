@@ -29,7 +29,7 @@ public final class Reminders {
 
     private Reminders() {}
 
-    /** JSON array of {id, name, at} for everything due and not yet announced. */
+    /** JSON array of {id, name, emoji, at} for everything due and not yet announced. */
     private static native String nativeDueNow(String filesDir);
 
     private static native void nativeMarkFired(String filesDir, String habitId);
@@ -75,6 +75,8 @@ public final class Reminders {
                 JSONObject item = due.getJSONObject(i);
                 String id = item.getString("id");
                 String name = item.getString("name");
+                String emoji = item.optString("emoji", "");
+                String title = emoji.isEmpty() ? name : emoji + " " + name;
 
                 Intent open = new Intent(context, MainActivity.class)
                         .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
@@ -83,7 +85,7 @@ public final class Reminders {
                         PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
 
                 Notification notification = new Notification.Builder(context, CHANNEL_ID)
-                        .setContentTitle(name)
+                        .setContentTitle(title)
                         .setContentText("Tap to check in")
                         .setSmallIcon(android.R.drawable.ic_menu_my_calendar)
                         .setAutoCancel(true)

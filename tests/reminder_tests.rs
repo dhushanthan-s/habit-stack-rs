@@ -191,3 +191,180 @@ fn next_fire_is_strictly_after_now() {
     let next = next_fire_after(&[reminder], at(8, 0)).unwrap();
     assert_eq!(next.date(), at(8, 0).date().succ_opt().unwrap());
 }
+
+// ------------------------------------------------------- recurrence kinds
+
+use habit_stack_rs::model::ScheduleKind;
+
+fn day(y: i32, m: u32, d: u32) -> NaiveDate {
+    NaiveDate::from_ymd_opt(y, m, d).unwrap()
+}
+
+/// 2026-09-11, the Friday the other tests are anchored to.
+fn friday() -> NaiveDate {
+    day(2026, 9, 11)
+}
+
+#[test]
+fn every_n_days_counts_from_its_anchor() {
+    let (_h, mut reminder) = fixture();
+    reminder.kind = ScheduleKind::EveryNDays;
+    reminder.interval_days = 3;
+    reminder.start_date = friday();
+
+    assert!(reminder.occurs_on(friday()), "the anchor day itself fires");
+    assert!(!reminder.occurs_on(day(2026, 9, 12)));
+    assert!(!reminder.occurs_on(day(2026, 9, 13)));
+    assert!(reminder.occurs_on(day(2026, 9, 14)), "three days on");
+    assert!(reminder.occurs_on(day(2026, 9, 17)), "and three more");
+
+    // Nothing before the anchor, even on a day the interval would land on.
+    assert!(!reminder.occurs_on(day(2026, 9, 8)));
+    assert!(!reminder.occurs_on(day(2026, 9, 5)));
+}
+
+#[test]
+fn an_interval_of_one_is_every_day() {
+    let (_h, mut reminder) = fixture();
+    reminder.kind = ScheduleKind::EveryNDays;
+    reminder.interval_days = 1;
+    reminder.start_date = friday();
+
+    for offset in 0..5 {
+        assert!(reminder.occurs_on(friday() + chrono::Duration::days(offset)));
+    }
+}
+
+#[test]
+fn monthly_clamps_to_the_last_day_of_short_months() {
+    let (_h, mut reminder) = fixture();
+    reminder.kind = ScheduleKind::Monthly;
+    reminder.day_of_month = 31;
+
+    // 2027 is not a leap year, 2028 is.
+    assert!(reminder.occurs_on(day(2027, 2, 28)), "clamps to 28 Feb");
+    assert!(!reminder.occurs_on(day(2027, 2, 27)));
+    assert!(reminder.occurs_on(day(2028, 2, 29)), "clamps to 29 Feb");
+    assert!(!reminder.occurs_on(day(2028, 2, 28)), "not the 28th in a leap year");
+    assert!(reminder.occurs_on(day(2027, 4, 30)), "clamps to 30 April");
+    assert!(reminder.occurs_on(day(2027, 5, 31)), "31 exists in May");
+    assert!(!reminder.occurs_on(day(2027, 5, 30)));
+}
+
+#[test]
+fn monthly_fires_exactly_once_per_month() {
+    let (_h, mut reminder) = fixture();
+    reminder.kind = ScheduleKind::Monthly;
+    reminder.day_of_month = 31;
+
+    // February 2027 has 28 days and must contain exactly one occurrence.
+    let hits = (1..=28)
+        .filter(|d| reminder.occurs_on(day(2027, 2, *d)))
+        .count();
+    assert_eq!(hits, 1);
+}
+
+#[test]
+fn a_one_off_fires_on_its_date_only() {
+    let (_h, mut reminder) = fixture();
+    reminder.kind = ScheduleKind::Once;
+    reminder.start_date = friday();
+
+    assert!(reminder.occurs_on(friday()));
+    assert!(!reminder.occurs_on(day(2026, 9, 10)));
+    assert!(!reminder.occurs_on(day(2026, 9, 12)));
+    // Same weekday a week later must not re-fire.
+    assert!(!reminder.occurs_on(day(2026, 9, 18)));
+}
+
+#[test]
+fn a_one_off_stops_arming_once_it_has_passed() {
+    let (_h, mut reminder) = fixture();
+    reminder.kind = ScheduleKind::Once;
+    reminder.start_date = friday();
+    reminder.hour = 8;
+
+    assert_eq!(
+        next_fire_after(&[reminder.clone()], at(7, 0)),
+        Some(friday().and_time(NaiveTime::from_hms_opt(8, 0, 0).unwrap())),
+    );
+    assert!(
+        next_fire_after(&[reminder], at(9, 0)).is_none(),
+        "a spent one-off must not arm another alarm"
+    );
+}
+
+#[test]
+fn a_one_off_years_out_still_arms() {
+    let (_h, mut reminder) = fixture();
+    reminder.kind = ScheduleKind::Once;
+    // Well past the forward-scan horizon, so this only passes because `Once`
+    // is answered directly rather than by walking the calendar.
+    reminder.start_date = day(2031, 1, 20);
+    reminder.hour = 8;
+
+    let next = next_fire_after(&[reminder], at(9, 0)).unwrap();
+    assert_eq!(next.date(), day(2031, 1, 20));
+}
+
+#[test]
+fn next_fire_picks_the_earliest_across_mixed_kinds() {
+    let weekly = {
+        let mut r = Reminder::new(Uuid::new_v4());
+        r.hour = 23; // today, late
+        r
+    };
+    let interval = {
+        let mut r = Reminder::new(Uuid::new_v4());
+        r.kind = ScheduleKind::EveryNDays;
+        r.interval_days = 2;
+        r.start_date = friday();
+        r.hour = 20;
+        r
+    };
+    let monthly = {
+        let mut r = Reminder::new(Uuid::new_v4());
+        r.kind = ScheduleKind::Monthly;
+        r.day_of_month = 30;
+        r.hour = 6;
+        r
+    };
+    let once = {
+        let mut r = Reminder::new(Uuid::new_v4());
+        r.kind = ScheduleKind::Once;
+        r.start_date = day(2026, 9, 13);
+        r.hour = 5;
+        r
+    };
+
+    // At 12:00 on Friday the 11th: the interval one fires at 20:00 today,
+    // before the weekly 23:00, the one-off on the 13th and the 30th monthly.
+    let next = next_fire_after(&[weekly, interval, monthly, once], at(12, 0)).unwrap();
+    assert_eq!(next, friday().and_time(NaiveTime::from_hms_opt(20, 0, 0).unwrap()));
+}
+
+#[test]
+fn a_disabled_reminder_of_any_kind_is_skipped() {
+    let (_h, mut reminder) = fixture();
+    reminder.kind = ScheduleKind::Monthly;
+    reminder.day_of_month = 11; // would fire on the fixture's Friday
+    reminder.enabled = false;
+
+    assert!(next_fire_after(&[reminder], at(1, 0)).is_none());
+}
+
+#[test]
+fn due_now_respects_a_non_weekly_schedule() {
+    let (habit, mut reminder) = fixture();
+    reminder.kind = ScheduleKind::EveryNDays;
+    reminder.interval_days = 2;
+    reminder.start_date = friday();
+    reminder.hour = 8;
+
+    assert_eq!(due(&reminder, &habit, &[], at(9, 0)), 1, "anchor day");
+
+    // The next day is off-schedule, so nothing is due however late it gets.
+    let tomorrow = day(2026, 9, 12).and_time(NaiveTime::from_hms_opt(23, 0, 0).unwrap());
+    let done = HashSet::new();
+    assert!(due_now(&[reminder], &[habit], &done, tomorrow).is_empty());
+}

@@ -18,7 +18,8 @@ fn db_path(env: &mut JNIEnv, files_dir: &JString) -> Option<PathBuf> {
     Some(PathBuf::from(dir).join("habits.db"))
 }
 
-/// JSON array of `{id, name, at}` for everything due and not yet announced.
+/// JSON array of `{id, name, emoji, at}` for everything due and not yet
+/// announced.
 /// Returns `[]` on any failure: a broken reminder must not crash the receiver.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_habitstack_Reminders_nativeDueNow<'local>(
@@ -36,6 +37,7 @@ pub extern "system" fn Java_dev_habitstack_Reminders_nativeDueNow<'local>(
                 serde_json::json!({
                     "id": d.habit_id.to_string(),
                     "name": d.habit_name,
+                    "emoji": d.emoji,
                     "at": d.at.format("%H:%M").to_string(),
                 })
             })

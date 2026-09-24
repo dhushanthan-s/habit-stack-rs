@@ -23,26 +23,49 @@ export struct GraphWeek {
 export struct HabitGraph {
     id: string,
     name: string,
+    emoji: string,
     color: color,
     weeks: [GraphWeek],
     summary: string,
 }
 
+// Everything the reminder editor shows, for a saved habit or the add form's
+// draft.
+export struct ReminderView {
+    on: bool,
+    // "07:00".
+    time_label: string,
+    // Seven entries, index 0 = Monday. An array rather than a bitmask because
+    // Slint expressions have no bitwise operators.
+    days: [bool],
+    // 0 = weekly, 1 = every N days, 2 = monthly, 3 = one-off.
+    kind: int,
+    // Human summary of the whole schedule, e.g. "Mon, Wed, Fri at 07:00".
+    summary: string,
+    // "3 days", for the interval stepper.
+    interval_label: string,
+    // "15th", for the monthly stepper.
+    month_day_label: string,
+    // "24 Sep 2026", for the one-off date stepper.
+    date_label: string,
+}
+
 export struct HabitItem {
     id: string,
     name: string,
+    // The habit's emoji, or empty to fall back to the colour dot.
+    emoji: string,
     color: color,
+    // Index into the palette, or -1 when the colour was derived rather than
+    // picked.
+    color_index: int,
     done_today: bool,
     streak_label: string,
     created_label: string,
     // Reminder time has passed today and the habit is not done.
     due: bool,
-    reminder_on: bool,
-    // "07:00", or empty when no reminder is set.
-    reminder_label: string,
-    // Seven entries, index 0 = Monday. An array rather than a bitmask because
-    // Slint expressions have no bitwise operators.
-    reminder_days: [bool],
+    // Labels are empty when no reminder is set.
+    reminder: ReminderView,
 }
 
 export struct HabitStats {

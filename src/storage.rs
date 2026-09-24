@@ -1,4 +1,4 @@
-use crate::model::{Habit, HabitEntry, HabitStatus, Reminder};
+use crate::model::{Habit, HabitEntry, HabitStatus, Reminder, ScheduleKind};
 use chrono::NaiveDate;
 #[cfg(not(target_os = "android"))]
 use directories::ProjectDirs;
@@ -95,17 +95,49 @@ impl Storage {
             );
             "#,
         )?;
+        self.migrate()
+    }
+
+    /// Schema upgrades, applied in order and recorded in `PRAGMA user_version`.
+    ///
+    /// The `CREATE TABLE` batch above deliberately stays frozen at the v0
+    /// shape: a fresh database is created at version 0 and then migrated, so
+    /// new and existing installs converge on exactly the same columns. Adding
+    /// a column to both places instead would make the `ALTER` fail as a
+    /// duplicate on first run.
+    fn migrate(&self) -> anyhow::Result<()> {
+        let version: i64 = self
+            .conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))?;
+
+        if version < 1 {
+            self.conn.execute_batch(
+                r#"
+                ALTER TABLE habits ADD COLUMN emoji TEXT;
+                ALTER TABLE habit_reminders
+                    ADD COLUMN kind TEXT NOT NULL DEFAULT 'weekly';
+                ALTER TABLE habit_reminders
+                    ADD COLUMN interval_days INTEGER NOT NULL DEFAULT 1;
+                ALTER TABLE habit_reminders
+                    ADD COLUMN day_of_month INTEGER NOT NULL DEFAULT 1;
+                ALTER TABLE habit_reminders ADD COLUMN start_date TEXT;
+                PRAGMA user_version = 1;
+                "#,
+            )?;
+        }
+
         Ok(())
     }
 
     pub fn create_habit(&self, habit: &Habit) -> anyhow::Result<()> {
         self.conn.execute(
-            r#"INSERT INTO habits (id, name, color, created_at, archived)
-               VALUES (?1, ?2, ?3, ?4, ?5)"#,
+            r#"INSERT INTO habits (id, name, color, emoji, created_at, archived)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6)"#,
             params![
                 habit.id.to_string(),
                 habit.name,
                 habit.color,
+                habit.emoji,
                 habit.created_at.to_string(),
                 if habit.archived { 1 } else { 0 },
             ],
@@ -116,10 +148,10 @@ impl Storage {
     pub fn list_habits(&self, include_archived: bool) -> anyhow::Result<Vec<Habit>> {
         let mut stmt = if include_archived {
             self.conn
-                .prepare("SELECT id, name, color, created_at, archived FROM habits")?
+                .prepare("SELECT id, name, color, emoji, created_at, archived FROM habits")?
         } else {
             self.conn.prepare(
-                "SELECT id, name, color, created_at, archived FROM habits WHERE archived = 0",
+                "SELECT id, name, color, emoji, created_at, archived FROM habits WHERE archived = 0",
             )?
         };
 
@@ -128,15 +160,17 @@ impl Storage {
             let id = Uuid::parse_str(&id_str).map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
             let name: String = row.get(1)?;
             let color: Option<String> = row.get(2)?;
-            let created_at_str: String = row.get(3)?;
+            let emoji: Option<String> = row.get(3)?;
+            let created_at_str: String = row.get(4)?;
             let created_at = NaiveDate::parse_from_str(&created_at_str, "%Y-%m-%d")
-                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e)))?;
-            let archived_int: i64 = row.get(4)?;
+                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, Box::new(e)))?;
+            let archived_int: i64 = row.get(5)?;
             let archived = archived_int != 0;
             Ok(Habit {
                 id,
                 name,
                 color,
+                emoji: emoji.filter(|e| !e.is_empty()),
                 created_at,
                 archived,
             })
@@ -149,9 +183,11 @@ impl Storage {
         Ok(habits)
     }
 
-    pub fn archive_habit(&self, habit_id: Uuid) -> anyhow::Result<()> {
+    /// Deletes the habit outright. Its entries and reminder go with it through
+    /// `ON DELETE CASCADE`, which `foreign_keys = ON` in `init_schema` enables.
+    pub fn delete_habit(&self, habit_id: Uuid) -> anyhow::Result<()> {
         self.conn.execute(
-            "UPDATE habits SET archived = 1 WHERE id = ?1",
+            "DELETE FROM habits WHERE id = ?1",
             params![habit_id.to_string()],
         )?;
         Ok(())
@@ -208,9 +244,20 @@ impl Storage {
         Ok(())
     }
 
+    /// `None` clears the emoji, restoring the plain colour dot.
+    pub fn update_habit_emoji(&self, habit_id: Uuid, emoji: Option<&str>) -> anyhow::Result<()> {
+        self.conn.execute(
+            "UPDATE habits SET emoji = ?1 WHERE id = ?2",
+            params![emoji, habit_id.to_string()],
+        )?;
+        Ok(())
+    }
+
     pub fn list_reminders(&self) -> anyhow::Result<Vec<Reminder>> {
         let mut stmt = self.conn.prepare(
-            "SELECT habit_id, time, days, enabled, last_fired FROM habit_reminders",
+            "SELECT habit_id, time, days, enabled, last_fired,
+                    kind, interval_days, day_of_month, start_date
+             FROM habit_reminders",
         )?;
         let rows = stmt.query_map([], |row| {
             let habit_id_str: String = row.get(0)?;
@@ -232,11 +279,23 @@ impl Storage {
             let days: i64 = row.get(2)?;
             let enabled: i64 = row.get(3)?;
             let last_fired: Option<String> = row.get(4)?;
+            let kind: String = row.get(5)?;
+            let interval_days: i64 = row.get(6)?;
+            let day_of_month: i64 = row.get(7)?;
+            let start_date: Option<String> = row.get(8)?;
             Ok(Reminder {
                 habit_id,
                 hour,
                 minute,
                 days: days as u8,
+                kind: ScheduleKind::parse(&kind).unwrap_or(ScheduleKind::Weekly),
+                interval_days: (interval_days.max(1)) as u32,
+                day_of_month: (day_of_month.clamp(1, 31)) as u32,
+                // Rows migrated from v0 have no anchor; today is the only
+                // sensible one, and it is unread until the kind changes.
+                start_date: start_date
+                    .and_then(|d| NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok())
+                    .unwrap_or_else(|| chrono::Local::now().date_naive()),
                 enabled: enabled != 0,
                 last_fired: last_fired
                     .and_then(|d| NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok()),
@@ -252,19 +311,29 @@ impl Storage {
 
     pub fn upsert_reminder(&self, reminder: &Reminder) -> anyhow::Result<()> {
         self.conn.execute(
-            r#"INSERT INTO habit_reminders (habit_id, time, days, enabled, last_fired)
-               VALUES (?1, ?2, ?3, ?4, ?5)
+            r#"INSERT INTO habit_reminders
+                   (habit_id, time, days, enabled, last_fired,
+                    kind, interval_days, day_of_month, start_date)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                ON CONFLICT(habit_id) DO UPDATE SET
                    time = excluded.time,
                    days = excluded.days,
                    enabled = excluded.enabled,
-                   last_fired = excluded.last_fired"#,
+                   last_fired = excluded.last_fired,
+                   kind = excluded.kind,
+                   interval_days = excluded.interval_days,
+                   day_of_month = excluded.day_of_month,
+                   start_date = excluded.start_date"#,
             params![
                 reminder.habit_id.to_string(),
                 reminder.time_string(),
                 reminder.days as i64,
                 if reminder.enabled { 1 } else { 0 },
                 reminder.last_fired.map(|d| d.to_string()),
+                reminder.kind.as_str(),
+                reminder.interval_days as i64,
+                reminder.day_of_month as i64,
+                reminder.start_date.to_string(),
             ],
         )?;
         Ok(())
