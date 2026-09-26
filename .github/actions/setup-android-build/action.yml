@@ -1,0 +1,34 @@
+name: Set up Android build
+description: JDK 17, the pinned Android NDK, and a Rust toolchain that targets Android, with caching.
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-java@v6
+      with:
+        distribution: temurin
+        java-version: "17"
+
+    # The NDK version lives in android/app/build.gradle.kts alone; read it
+    # from there so the two can never drift apart.
+    - name: Install the pinned Android NDK
+      shell: bash
+      run: |
+        ndk=$(sed -n 's/^val pinnedNdkVersion = "\(.*\)"$/\1/p' android/app/build.gradle.kts)
+        if [ -z "$ndk" ]; then
+          echo "::error::pinnedNdkVersion not found in android/app/build.gradle.kts"
+          exit 1
+        fi
+        "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$ndk"
+        # Runner images point these at their own default NDK; repoint them so
+        # nothing picks up a different version.
+        echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ndk" >> "$GITHUB_ENV"
+        echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/$ndk" >> "$GITHUB_ENV"
+
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: aarch64-linux-android
+
+    - uses: Swatinem/rust-cache@v2
+
+    - uses: gradle/actions/setup-gradle@v6

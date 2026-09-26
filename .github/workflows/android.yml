@@ -1,0 +1,106 @@
+name: Android
+
+# Pushes and pull requests get tests plus an installable debug APK. Pushing a
+# tag vX.Y.Z builds a signed release APK and App Bundle and publishes them as a
+# GitHub Release. See android/README.md for the signing secrets this needs.
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # The desktop Slint backend links against these.
+      - name: Install system libraries
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo test
+        run: cargo test --locked
+
+  debug-apk:
+    name: Debug APK
+    needs: test
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-android-build
+
+      - name: Build
+        working-directory: android
+        run: ./gradlew assembleDebug
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: habit-stack-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+  release:
+    name: Signed release
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-android-build
+
+      # The app's version comes from Cargo.toml, so a tag naming any other
+      # version would publish a release whose APK disagrees with its title.
+      - name: Check the tag matches Cargo.toml
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match Cargo.toml version $version"
+            exit 1
+          fi
+
+      - name: Restore the signing key
+        env:
+          SIGNING_KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$SIGNING_KEYSTORE_BASE64" ]; then
+            echo "::error::Release signing secrets are missing; see android/README.md"
+            exit 1
+          fi
+          echo "$SIGNING_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
+          echo "SIGNING_KEYSTORE_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+
+      - name: Build signed APK and App Bundle
+        working-directory: android
+        env:
+          SIGNING_KEYSTORE_PASSWORD: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: ./gradlew assembleRelease bundleRelease
+
+      - name: Name the outputs after the release
+        run: |
+          mkdir dist
+          cp android/app/build/outputs/apk/release/app-release.apk "dist/habit-stack-$GITHUB_REF_NAME.apk"
+          cp android/app/build/outputs/bundle/release/app-release.aab "dist/habit-stack-$GITHUB_REF_NAME.aab"
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true

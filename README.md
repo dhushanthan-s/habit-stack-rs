@@ -51,6 +51,12 @@ This will:
 - Create a default habit (`Daily Check-in`) on first launch.
 - Show the Git-style graph for the last several weeks and allow tapping a day to toggle completion.
 
+### Android
+
+The Android app lives in `android/`. See [android/README.md](android/README.md)
+for building APKs locally and for the CI pipeline that publishes signed
+releases when a `vX.Y.Z` tag is pushed.
+
 ### Testing
 
 Run tests with:
