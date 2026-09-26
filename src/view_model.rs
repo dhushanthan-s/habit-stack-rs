@@ -1,4 +1,4 @@
-use crate::model::{Habit, HabitEntry, HabitStatus, Reminder};
+use crate::model::{Habit, HabitEntry, HabitStatus, Reminder, ScheduleKind};
 use crate::reminders::{self, DueReminder};
 use crate::storage::Storage;
 use chrono::{Datelike, Duration, Local, NaiveDate, NaiveDateTime, Weekday};
@@ -19,6 +19,37 @@ pub const HABIT_PALETTE: [(u8, u8, u8); 8] = [
     (0x4A, 0xDE, 0x80), // green
     (0xFB, 0xBF, 0x24), // amber
     (0xF8, 0x71, 0x71), // rose
+];
+
+/// Emoji offered to habits. Like `HABIT_PALETTE` the UI sends back an index,
+/// with `None` meaning "no emoji, show the colour dot". A curated set rather
+/// than free text: it renders the same on desktop and Android and needs no
+/// grapheme-cluster validation.
+pub const EMOJI_PALETTE: [&str; 24] = [
+    "\u{1F3C3}", // runner
+    "\u{1F4A7}", // droplet
+    "\u{1F4DA}", // books
+    "\u{1F9D8}", // meditation
+    "\u{1F6CF}", // bed
+    "\u{1F957}", // salad
+    "\u{1F48A}", // pill
+    "\u{1F3B8}", // guitar
+    "\u{1F3CB}", // weightlifter
+    "\u{1F6B6}", // walker
+    "\u{1F9F9}", // broom
+    "\u{270D}",  // writing hand
+    "\u{1F3A8}", // palette
+    "\u{2615}",  // coffee
+    "\u{1F331}", // seedling
+    "\u{1F4B0}", // money bag
+    "\u{1F9E0}", // brain
+    "\u{1F9B7}", // tooth
+    "\u{1F6AD}", // no smoking
+    "\u{1F4F5}", // no phones
+    "\u{1F64F}", // folded hands
+    "\u{1F415}", // dog
+    "\u{1F3AF}", // target
+    "\u{2B50}",  // star
 ];
 
 /// Superseded by `SETTING_THEME_MODE`; still read once so an existing install
@@ -135,6 +166,13 @@ pub fn palette_hex(index: usize) -> String {
     hex_of(HABIT_PALETTE[index % HABIT_PALETTE.len()])
 }
 
+/// `None`, or an out-of-range index, means no emoji.
+pub fn emoji_of(index: Option<usize>) -> Option<String> {
+    index
+        .and_then(|i| EMOJI_PALETTE.get(i))
+        .map(|e| (*e).to_string())
+}
+
 /// A habit's accent colour: whatever was stored, else a palette entry derived
 /// from its UUID. Deriving rather than backfilling keeps colours stable across
 /// sessions without needing a DB migration.
@@ -156,6 +194,23 @@ pub enum Scope {
     /// Every habit aggregated, so a day's level reflects how many were done.
     All,
     Habit(Uuid),
+}
+
+/// Which reminder an edit applies to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReminderTarget {
+    /// The add form's unsaved reminder, stored once the habit is created.
+    Draft,
+    Habit(Uuid),
+}
+
+/// The add form's starting reminder: off, so a new habit gets none unless it
+/// is switched on. The nil id is replaced when the habit is created.
+fn blank_draft() -> Reminder {
+    Reminder {
+        enabled: false,
+        ..Reminder::new(Uuid::nil())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -203,6 +258,9 @@ pub struct AppState {
     /// Aggregated across every habit (`Scope::All`).
     pub totals: Stats,
     pub reminders: Vec<Reminder>,
+    /// Reminder being configured in the add form. Never in `reminders`, so it
+    /// cannot surface as due.
+    pub draft_reminder: Reminder,
     /// Recomputed each tick; drives the badges and banner.
     pub due: Vec<DueReminder>,
     pub theme_mode: ThemeMode,
@@ -224,6 +282,7 @@ impl AppState {
             graphs: Vec::new(),
             totals: Stats::default(),
             reminders: Vec::new(),
+            draft_reminder: blank_draft(),
             due: Vec::new(),
             theme_mode: ThemeMode::Dark,
             accent_index: None,
@@ -532,10 +591,26 @@ impl AppState {
         Ok(())
     }
 
-    pub fn add_habit(&mut self, name: String, color_index: usize) -> anyhow::Result<Uuid> {
-        let habit = Habit::new(name, Some(palette_hex(color_index)));
+    /// `reminder` is saved against the new habit, so one configured in the add
+    /// form arrives with it.
+    pub fn add_habit(
+        &mut self,
+        name: String,
+        color_index: usize,
+        emoji_index: Option<usize>,
+        reminder: Option<Reminder>,
+    ) -> anyhow::Result<Uuid> {
+        let habit =
+            Habit::new(name, Some(palette_hex(color_index))).with_emoji(emoji_of(emoji_index));
         let id = habit.id;
         self.storage.create_habit(&habit)?;
+        if let Some(reminder) = reminder {
+            self.storage.upsert_reminder(&Reminder {
+                habit_id: id,
+                last_fired: None,
+                ..reminder
+            })?;
+        }
         self.habits = self.storage.list_habits(false)?;
         self.refresh()?;
         Ok(id)
@@ -548,8 +623,22 @@ impl AppState {
         self.refresh()
     }
 
-    pub fn archive_habit(&mut self, habit_id: Uuid) -> anyhow::Result<()> {
-        self.storage.archive_habit(habit_id)?;
+    /// `None` clears the emoji and restores the colour dot.
+    pub fn set_habit_emoji(
+        &mut self,
+        habit_id: Uuid,
+        emoji_index: Option<usize>,
+    ) -> anyhow::Result<()> {
+        let emoji = emoji_of(emoji_index);
+        self.storage
+            .update_habit_emoji(habit_id, emoji.as_deref())?;
+        self.habits = self.storage.list_habits(false)?;
+        self.refresh()
+    }
+
+    /// Removes the habit for good, along with its entries and reminder.
+    pub fn delete_habit(&mut self, habit_id: Uuid) -> anyhow::Result<()> {
+        self.storage.delete_habit(habit_id)?;
         self.habits = self.storage.list_habits(false)?;
         self.refresh()
     }
@@ -606,46 +695,95 @@ impl AppState {
         Ok(())
     }
 
-    pub fn set_reminder_enabled(&mut self, habit_id: Uuid, enabled: bool) -> anyhow::Result<()> {
-        if !enabled && self.reminder_for(habit_id).is_none() {
-            return Ok(());
-        }
-        let mut reminder = self.reminder_or_default(habit_id);
-        reminder.enabled = enabled;
-        self.save_reminder(reminder)
+    /// Starts the add form's draft over: off, at the default schedule.
+    pub fn reset_draft_reminder(&mut self) {
+        self.draft_reminder = blank_draft();
     }
 
-    /// Nudges the time by whole hours and/or minutes, wrapping within the day.
+    /// Applies `edit` to the draft in memory, or to a habit's reminder, which
+    /// is written back only if the edit changed something.
+    fn edit_reminder(
+        &mut self,
+        target: ReminderTarget,
+        edit: impl FnOnce(&mut Reminder) -> bool,
+    ) -> anyhow::Result<()> {
+        match target {
+            ReminderTarget::Draft => {
+                edit(&mut self.draft_reminder);
+                Ok(())
+            }
+            ReminderTarget::Habit(habit_id) => {
+                let mut reminder = self.reminder_or_default(habit_id);
+                if edit(&mut reminder) {
+                    self.save_reminder(reminder)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+    }
+
+    pub fn set_reminder_enabled(
+        &mut self,
+        target: ReminderTarget,
+        enabled: bool,
+    ) -> anyhow::Result<()> {
+        if let ReminderTarget::Habit(habit_id) = target {
+            if !enabled && self.reminder_for(habit_id).is_none() {
+                return Ok(());
+            }
+        }
+        self.edit_reminder(target, |r| {
+            r.enabled = enabled;
+            true
+        })
+    }
+
     pub fn shift_reminder_time(
         &mut self,
-        habit_id: Uuid,
+        target: ReminderTarget,
         hours: i32,
         minutes: i32,
     ) -> anyhow::Result<()> {
-        let mut reminder = self.reminder_or_default(habit_id);
-        let total = reminder.hour as i32 * 60 + reminder.minute as i32 + hours * 60 + minutes;
-        let wrapped = total.rem_euclid(24 * 60);
-        reminder.hour = (wrapped / 60) as u32;
-        reminder.minute = (wrapped % 60) as u32;
-        // Editing the time re-arms it for today.
-        reminder.last_fired = None;
-        self.save_reminder(reminder)
+        self.edit_reminder(target, |r| r.shift_time(hours, minutes))
     }
 
-    /// `day` is 0 = Monday … 6 = Sunday. Refuses to clear the last day, since a
-    /// reminder with no days would silently never fire.
-    pub fn toggle_reminder_day(&mut self, habit_id: Uuid, day: u32) -> anyhow::Result<()> {
-        if day > 6 {
-            return Ok(());
-        }
-        let mut reminder = self.reminder_or_default(habit_id);
-        let bit = 1u8 << day;
-        let next = reminder.days ^ bit;
-        if next == 0 {
-            return Ok(());
-        }
-        reminder.days = next;
-        self.save_reminder(reminder)
+    pub fn toggle_reminder_day(&mut self, target: ReminderTarget, day: u32) -> anyhow::Result<()> {
+        self.edit_reminder(target, |r| r.toggle_day(day))
+    }
+
+    pub fn set_reminder_kind(
+        &mut self,
+        target: ReminderTarget,
+        kind: ScheduleKind,
+    ) -> anyhow::Result<()> {
+        let today = self.today;
+        self.edit_reminder(target, |r| r.set_kind(kind, today))
+    }
+
+    pub fn shift_reminder_interval(
+        &mut self,
+        target: ReminderTarget,
+        delta: i32,
+    ) -> anyhow::Result<()> {
+        self.edit_reminder(target, |r| r.shift_interval(delta))
+    }
+
+    pub fn shift_reminder_month_day(
+        &mut self,
+        target: ReminderTarget,
+        delta: i32,
+    ) -> anyhow::Result<()> {
+        self.edit_reminder(target, |r| r.shift_month_day(delta))
+    }
+
+    pub fn shift_reminder_date(
+        &mut self,
+        target: ReminderTarget,
+        days: i32,
+        months: i32,
+    ) -> anyhow::Result<()> {
+        self.edit_reminder(target, |r| r.shift_date(days, months))
     }
 
     fn done_today_set(&self) -> HashSet<Uuid> {

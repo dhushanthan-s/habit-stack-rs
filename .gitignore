@@ -1,2 +1,8 @@
 /target
 .DS_Store
+
+# Android build output and machine-specific SDK path
+/android/.gradle
+/android/build
+/android/app/build
+/android/local.properties

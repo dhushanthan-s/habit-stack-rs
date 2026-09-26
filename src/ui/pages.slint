@@ -1,9 +1,10 @@
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { HabitGraph, HabitItem, HabitStats } from "types.slint";
+import { HabitGraph, HabitItem, HabitStats, ReminderView } from "types.slint";
 import {
-    Card, SectionLabel, StatBlock, Dot, HabitRow, ColorSwatch,
-    TextField, GhostButton, Toggle, Stepper, DayToggle, Segmented, SettingRow,
+    Card, SectionLabel, StatBlock, Dot, HabitMark, HabitRow,
+    SwatchGrid, EmojiGrid, TextField, GhostButton, Segmented, SettingRow,
+    ReminderEditor,
 } from "components.slint";
 import { ContributionGraph, GraphKey } from "graph.slint";
 
@@ -61,7 +62,8 @@ export component GraphPage inherits VerticalLayout {
                 spacing: Theme.sp_2;
                 alignment: start;
 
-                Dot {
+                HabitMark {
+                    emoji: graph.emoji;
                     tint: graph.color;
                 }
 
@@ -110,7 +112,7 @@ export component GraphPage inherits VerticalLayout {
                 horizontal-alignment: center;
             }
             Text {
-                text: "Add a habit on the Today tab and its graph appears here.";
+                text: "Add a habit on the Habits tab and its graph appears here.";
                 font-size: Theme.fs_caption;
                 color: Theme.text_faint;
                 horizontal-alignment: center;
@@ -122,17 +124,11 @@ export component GraphPage inherits VerticalLayout {
 
 export component TodayPage inherits VerticalLayout {
     in property <[HabitItem]> habits;
-    in property <[color]> palette;
     in property <color> accent;
     in property <int> due_count;
     in property <string> due_label;
-    in-out property <string> new_habit_name;
-    in-out property <int> new_color_index;
 
     callback toggle(id: string);
-    callback add();
-
-    property <bool> adding: false;
 
     spacing: Theme.sp_4;
 
@@ -166,7 +162,7 @@ export component TodayPage inherits VerticalLayout {
         text: "TODAY";
     }
 
-    Card {
+    if root.habits.length > 0 : Card {
         VerticalLayout {
             padding: Theme.sp_2;
             spacing: 2px;
@@ -176,6 +172,196 @@ export component TodayPage inherits VerticalLayout {
                 selectable: false;
                 toggled => {
                     root.toggle(habit.id);
+                }
+            }
+        }
+    }
+
+    // Creating habits lives on the Habits tab, so point there rather than
+    // leaving an empty card with no way forward.
+    if root.habits.length == 0 : Card {
+        VerticalLayout {
+            padding: Theme.sp_6;
+            spacing: Theme.sp_2;
+
+            Text {
+                text: "Nothing to check off";
+                font-size: Theme.fs_body;
+                font-weight: 600;
+                color: Theme.text;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: "Add a habit on the Habits tab and it shows up here each day.";
+                font-size: Theme.fs_caption;
+                color: Theme.text_faint;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+    }
+}
+
+export component HabitsPage inherits VerticalLayout {
+    in property <[HabitItem]> habits;
+    in property <[color]> palette;
+    in property <[string]> emoji_palette;
+    in property <[string]> day_labels;
+    in-out property <string> new_habit_name;
+    in-out property <int> new_color_index;
+    /// -1 means no emoji.
+    in-out property <int> new_emoji_index;
+    /// The add form's reminder, saved with the habit when it is added.
+    in property <ReminderView> new_reminder;
+
+    callback add();
+    /// Rust resets the whole form, draft reminder included.
+    callback cancel_add();
+    callback recolor(id: string, index: int);
+    callback set_emoji(id: string, index: int);
+    callback delete(id: string);
+    callback reminder_toggled(id: string, on: bool);
+    callback reminder_shift(id: string, hours: int, minutes: int);
+    callback reminder_day_toggled(id: string, day: int);
+    callback reminder_kind_picked(id: string, kind: int);
+    callback reminder_interval_shift(id: string, delta: int);
+    callback reminder_month_day_shift(id: string, delta: int);
+    callback reminder_date_shift(id: string, days: int, months: int);
+
+    property <string> editing_id: "";
+    property <bool> adding: false;
+    /// Set by the first tap on Delete; only one habit is open at a time.
+    property <bool> confirm_delete: false;
+
+    spacing: Theme.sp_4;
+
+    SectionLabel {
+        text: "ALL HABITS";
+    }
+
+    Card {
+        VerticalLayout {
+            padding: Theme.sp_2;
+            spacing: 2px;
+
+            for habit in root.habits : VerticalLayout {
+                spacing: 0px;
+
+                HabitRow {
+                    item: habit;
+                    subtitle: habit.created_label;
+                    show_check: false;
+                    show_due: false;
+                    picked => {
+                        root.editing_id = root.editing_id == habit.id ? "" : habit.id;
+                        root.confirm_delete = false;
+                    }
+                }
+
+                if root.editing_id == habit.id : VerticalLayout {
+                    padding-left: Theme.sp_4;
+                    padding-right: Theme.sp_2;
+                    padding-bottom: Theme.sp_3;
+                    spacing: Theme.sp_3;
+
+                    SwatchGrid {
+                        tones: root.palette;
+                        selected_index: habit.color_index;
+                        columns: 5;
+                        picked(index) => {
+                            root.recolor(habit.id, index);
+                        }
+                    }
+
+                    EmojiGrid {
+                        emojis: root.emoji_palette;
+                        selected_emoji: habit.emoji;
+                        columns: 6;
+                        picked(index) => {
+                            root.set_emoji(habit.id, index);
+                        }
+                    }
+
+                    Rectangle {
+                        height: 1px;
+                        background: Theme.border;
+                    }
+
+                    ReminderEditor {
+                        reminder: habit.reminder;
+                        tint: habit.color;
+                        day_labels: root.day_labels;
+                        toggled(on) => {
+                            root.reminder_toggled(habit.id, on);
+                        }
+                        shift(hours, minutes) => {
+                            root.reminder_shift(habit.id, hours, minutes);
+                        }
+                        day_toggled(day) => {
+                            root.reminder_day_toggled(habit.id, day);
+                        }
+                        kind_picked(kind) => {
+                            root.reminder_kind_picked(habit.id, kind);
+                        }
+                        interval_shift(delta) => {
+                            root.reminder_interval_shift(habit.id, delta);
+                        }
+                        month_day_shift(delta) => {
+                            root.reminder_month_day_shift(habit.id, delta);
+                        }
+                        date_shift(days, months) => {
+                            root.reminder_date_shift(habit.id, days, months);
+                        }
+                    }
+
+                    Rectangle {
+                        height: 1px;
+                        background: Theme.border;
+                    }
+
+                    // Deleting erases the habit's history, so it takes a
+                    // second tap.
+                    if !root.confirm_delete : HorizontalLayout {
+                        alignment: start;
+                        GhostButton {
+                            label: "Delete";
+                            tint: #F87171;
+                            clicked => {
+                                root.confirm_delete = true;
+                            }
+                        }
+                    }
+
+                    if root.confirm_delete : VerticalLayout {
+                        spacing: Theme.sp_2;
+
+                        Text {
+                            text: "Delete this habit and all of its history? This can't be undone.";
+                            font-size: Theme.fs_caption;
+                            color: Theme.text_muted;
+                            wrap: word-wrap;
+                        }
+
+                        HorizontalLayout {
+                            spacing: Theme.sp_2;
+                            GhostButton {
+                                label: "Cancel";
+                                tint: Theme.text_faint;
+                                clicked => {
+                                    root.confirm_delete = false;
+                                }
+                            }
+                            GhostButton {
+                                label: "Delete";
+                                tint: #F87171;
+                                clicked => {
+                                    root.delete(habit.id);
+                                    root.editing_id = "";
+                                    root.confirm_delete = false;
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -205,15 +391,56 @@ export component TodayPage inherits VerticalLayout {
                     }
                 }
 
-                HorizontalLayout {
-                    spacing: Theme.sp_2;
-                    alignment: start;
-                    for tone[i] in root.palette : ColorSwatch {
-                        swatch: tone;
-                        selected: i == root.new_color_index;
-                        clicked => {
-                            root.new_color_index = i;
-                        }
+                SwatchGrid {
+                    tones: root.palette;
+                    selected_index: root.new_color_index;
+                    columns: 5;
+                    picked(index) => {
+                        root.new_color_index = index;
+                    }
+                }
+
+                EmojiGrid {
+                    emojis: root.emoji_palette;
+                    selected_emoji: root.new_emoji_index == -1
+                        ? ""
+                        : root.emoji_palette[root.new_emoji_index];
+                    columns: 6;
+                    picked(index) => {
+                        root.new_emoji_index = index;
+                    }
+                }
+
+                Rectangle {
+                    height: 1px;
+                    background: Theme.border;
+                }
+
+                // An empty id addresses the draft rather than a saved habit.
+                ReminderEditor {
+                    reminder: root.new_reminder;
+                    tint: root.palette[root.new_color_index];
+                    day_labels: root.day_labels;
+                    toggled(on) => {
+                        root.reminder_toggled("", on);
+                    }
+                    shift(hours, minutes) => {
+                        root.reminder_shift("", hours, minutes);
+                    }
+                    day_toggled(day) => {
+                        root.reminder_day_toggled("", day);
+                    }
+                    kind_picked(kind) => {
+                        root.reminder_kind_picked("", kind);
+                    }
+                    interval_shift(delta) => {
+                        root.reminder_interval_shift("", delta);
+                    }
+                    month_day_shift(delta) => {
+                        root.reminder_month_day_shift("", delta);
+                    }
+                    date_shift(days, months) => {
+                        root.reminder_date_shift("", days, months);
                     }
                 }
 
@@ -224,7 +451,7 @@ export component TodayPage inherits VerticalLayout {
                         tint: Theme.text_faint;
                         clicked => {
                             root.adding = false;
-                            root.new_habit_name = "";
+                            root.cancel_add();
                         }
                     }
                     GhostButton {
@@ -239,162 +466,9 @@ export component TodayPage inherits VerticalLayout {
             }
         }
     }
-}
-
-export component HabitsPage inherits VerticalLayout {
-    in property <[HabitItem]> habits;
-    in property <[color]> palette;
-    in property <[string]> day_labels;
-
-    callback recolor(id: string, index: int);
-    callback archive(id: string);
-    callback reminder_toggled(id: string, on: bool);
-    callback reminder_shift(id: string, hours: int, minutes: int);
-    callback reminder_day_toggled(id: string, day: int);
-
-    property <string> editing_id: "";
-
-    spacing: Theme.sp_4;
-
-    SectionLabel {
-        text: "ALL HABITS";
-    }
-
-    Card {
-        VerticalLayout {
-            padding: Theme.sp_2;
-            spacing: 2px;
-
-            for habit in root.habits : VerticalLayout {
-                spacing: 0px;
-
-                HabitRow {
-                    item: habit;
-                    subtitle: habit.created_label;
-                    show_check: false;
-                    show_due: false;
-                    picked => {
-                        root.editing_id = root.editing_id == habit.id ? "" : habit.id;
-                    }
-                }
-
-                if root.editing_id == habit.id : VerticalLayout {
-                    padding-left: Theme.sp_4;
-                    padding-right: Theme.sp_2;
-                    padding-bottom: Theme.sp_3;
-                    spacing: Theme.sp_3;
-
-                    HorizontalLayout {
-                        spacing: Theme.sp_2;
-                        alignment: start;
-                        for tone[i] in root.palette : ColorSwatch {
-                            swatch: tone;
-                            selected: habit.color == tone;
-                            clicked => {
-                                root.recolor(habit.id, i);
-                            }
-                        }
-                    }
-
-                    Rectangle {
-                        height: 1px;
-                        background: Theme.border;
-                    }
-
-                    HorizontalLayout {
-                        spacing: Theme.sp_3;
-
-                        VerticalLayout {
-                            alignment: center;
-                            Text {
-                                text: "Remind me";
-                                font-size: Theme.fs_body;
-                                font-weight: 500;
-                                color: Theme.text;
-                            }
-                        }
-
-                        VerticalLayout {
-                            alignment: center;
-                            Toggle {
-                                on: habit.reminder_on;
-                                tint: habit.color;
-                                toggled(on) => {
-                                    root.reminder_toggled(habit.id, on);
-                                }
-                            }
-                        }
-                    }
-
-                    if habit.reminder_on : VerticalLayout {
-                        spacing: Theme.sp_3;
-
-                        HorizontalLayout {
-                            spacing: Theme.sp_2;
-                            alignment: start;
-
-                            VerticalLayout {
-                                alignment: center;
-                                Text {
-                                    text: "Time";
-                                    font-size: Theme.fs_label;
-                                    color: Theme.text_muted;
-                                    min-width: 46px;
-                                }
-                            }
-
-                            Stepper {
-                                value: habit.reminder_label;
-                                step(delta) => {
-                                    root.reminder_shift(habit.id, delta, 0);
-                                }
-                            }
-
-                            Stepper {
-                                value: "5m";
-                                step(delta) => {
-                                    root.reminder_shift(habit.id, 0, delta * 5);
-                                }
-                            }
-                        }
-
-                        HorizontalLayout {
-                            spacing: Theme.sp_1;
-                            alignment: start;
-                            for on[day] in habit.reminder_days : DayToggle {
-                                label: root.day_labels[day];
-                                on: on;
-                                tint: habit.color;
-                                clicked => {
-                                    root.reminder_day_toggled(habit.id, day);
-                                }
-                            }
-                        }
-                    }
-
-                    Rectangle {
-                        height: 1px;
-                        background: Theme.border;
-                    }
-
-                    HorizontalLayout {
-                        alignment: start;
-                        GhostButton {
-                            label: "Archive habit";
-                            tint: #F87171;
-                            clicked => {
-                                root.archive(habit.id);
-                                root.editing_id = "";
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
 
     Text {
-        text: "Tap a habit to change its colour or archive it.";
+        text: "Tap a habit to change its look, set a schedule, or delete it.";
         font-size: Theme.fs_caption;
         color: Theme.text_faint;
         horizontal-alignment: center;
@@ -443,29 +517,16 @@ export component SettingsPage inherits VerticalLayout {
                 label: "Accent";
                 hint: "Used for the tab indicator and totals. Auto follows your first habit.";
 
-                HorizontalLayout {
-                    spacing: Theme.sp_2;
-                    alignment: start;
-
-                    ColorSwatch {
-                        swatch: root.accent_index == -1 ? root.accent : Theme.surface_alt;
-                        selected: root.accent_index == -1;
-                        clicked => {
-                            root.accent_picked(-1);
-                        }
-                    }
-
-                    Rectangle {
-                        width: 1px;
-                        background: Theme.border;
-                    }
-
-                    for tone[i] in root.palette : ColorSwatch {
-                        swatch: tone;
-                        selected: i == root.accent_index;
-                        clicked => {
-                            root.accent_picked(i);
-                        }
+                // Wrapped: nine swatches in one row needed 343px and the card
+                // only ever offers the window width minus 80px.
+                SwatchGrid {
+                    tones: root.palette;
+                    selected_index: root.accent_index;
+                    show_auto: true;
+                    auto_tone: root.accent_index == -1 ? root.accent : Theme.surface_alt;
+                    columns: 5;
+                    picked(index) => {
+                        root.accent_picked(index);
                     }
                 }
             }

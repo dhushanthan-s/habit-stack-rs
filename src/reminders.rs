@@ -5,8 +5,9 @@
 //! and the Android notification receiver share one implementation of "is this
 //! actually due?" rather than each growing their own.
 
-use crate::model::{Habit, Reminder};
-use chrono::{Datelike, NaiveDateTime, NaiveTime};
+use crate::model::{Habit, HabitStatus, Reminder};
+use crate::storage::Storage;
+use chrono::{NaiveDateTime, NaiveTime};
 use std::collections::HashSet;
 use uuid::Uuid;
 
@@ -14,6 +15,9 @@ use uuid::Uuid;
 pub struct DueReminder {
     pub habit_id: Uuid,
     pub habit_name: String,
+    /// The habit's emoji, or empty. Carried here so the Android notification
+    /// can title itself without a second lookup.
+    pub emoji: String,
     pub at: NaiveTime,
 }
 
@@ -26,13 +30,13 @@ pub fn due_now(
     done_today: &HashSet<Uuid>,
     now: NaiveDateTime,
 ) -> Vec<DueReminder> {
-    let weekday = now.date().weekday();
+    let today = now.date();
     let time = now.time();
 
     let mut due: Vec<DueReminder> = reminders
         .iter()
         .filter(|r| r.enabled)
-        .filter(|r| r.fires_on(weekday))
+        .filter(|r| r.occurs_on(today))
         .filter(|r| r.time_of_day() <= time)
         .filter(|r| !done_today.contains(&r.habit_id))
         .filter_map(|r| {
@@ -42,6 +46,7 @@ pub fn due_now(
             Some(DueReminder {
                 habit_id: r.habit_id,
                 habit_name: habit.name.clone(),
+                emoji: habit.emoji.clone().unwrap_or_default(),
                 at: r.time_of_day(),
             })
         })
@@ -70,4 +75,32 @@ pub fn to_announce(
         .into_iter()
         .filter(|d| !fired.contains(&d.habit_id))
         .collect()
+}
+
+/// The soonest moment any enabled reminder fires. Pure, so the Android alarm
+/// scheduler and its tests share one definition of "when next". Each reminder
+/// answers for its own recurrence, so a monthly or one-off date is reached
+/// just as reliably as a weekday.
+pub fn next_fire_after(reminders: &[Reminder], now: NaiveDateTime) -> Option<NaiveDateTime> {
+    reminders
+        .iter()
+        .filter(|r| r.enabled)
+        .filter_map(|r| r.next_occurrence_after(now))
+        .min()
+}
+
+/// Gathers the inputs `due_now` needs straight from storage. Used by the
+/// Android receiver, which runs with no `AppState` around.
+pub fn scan(storage: &Storage, now: NaiveDateTime) -> anyhow::Result<Vec<DueReminder>> {
+    let habits = storage.list_habits(false)?;
+    let reminders = storage.list_reminders()?;
+    let today = now.date();
+    let ids: Vec<Uuid> = habits.iter().map(|h| h.id).collect();
+    let done: HashSet<Uuid> = storage
+        .entries_for_period(&ids, today, today)?
+        .into_iter()
+        .filter(|e| e.status == HabitStatus::Done)
+        .map(|e| e.habit_id)
+        .collect();
+    Ok(to_announce(&reminders, &habits, &done, now))
 }
